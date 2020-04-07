@@ -1,0 +1,11 @@
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage[a4paper,margin=20mm]{geometry}
+
+\newcommand{\clusterbegins}[1]{{\LARGE\noindent CLUSTER #1}\par\bigskip\noindent}
+\newcommand{\clusterends}[1]{\newpage}
+\newcommand{\clusterentry}[1]{\includegraphics[scale=0.6]{boxes/#1}}
+
+\begin{document}
+\input clusters_input.tex
+\end{document}
