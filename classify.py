@@ -75,5 +75,5 @@ for i, r in enumerate(dec):
     m = re.match('.*(\d{6}):(\d+)_(\d+)_(\d+)_(\d+)_(\d+)', ya[i])
     assert m, ya[i]
     f = int(m.group(2))
-    print('*boxdata*', m.group(1), f , f+1, 'mtcnn', 'facenet',
-          m.group(3), m.group(4), m.group(5), m.group(6), s, i2a[z1])
+    print('**boxdata**', m.group(1), f , f+1, 'mtcnn', 'facenet',
+          m.group(3), m.group(4), m.group(5), m.group(6), s, 'face', i2a[z1])
