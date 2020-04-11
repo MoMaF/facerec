@@ -113,8 +113,8 @@ def process_video(file, beg = 0, end = -1, margin = 2, iou = 0.9):
             fx = process(buf)
             for b in fx['boxes']:
                 b['label'] = 'kept-'+b['label']
-            save_images(fx, False, True)
-            #print_features(fx)
+            save_images(fx, True, True)
+            print_features(fx)
             buf = buf[1:]
         
     cap.release()
