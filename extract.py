@@ -11,22 +11,29 @@ import tensorflow
 from PIL import Image, ImageDraw
 import cv2
 
-margin = 0
-image_size = 160
-min_face_size = 80
+CROP_MARGIN = 0
+FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
+MIN_FACE_SIZE = 80  # minimum detection size
+
+# We'll save face images and latent vector features here:
+IMAGE_OUT_PATH = "./images"
+FEATURES_OUT_PATH = "./features"
+os.makedirs(IMAGE_OUT_PATH, exist_ok=True)
+os.makedirs(FEATURES_OUT_PATH, exist_ok=True)
 
 facenet = tensorflow.keras.models.load_model('facenet_keras.h5')
 facenet.load_weights('facenet_keras_weights.h5')
-detector = mtcnn.MTCNN(min_face_size=min_face_size)
+detector = mtcnn.MTCNN(min_face_size=MIN_FACE_SIZE)
 
 
 def process_image(file):
     label,_ = os.path.splitext(os.path.basename(file))
     img = Image.open(file).convert('RGB')
-    return process_frame(np.asarray(img), label)
-
+    return process_frame(np.asarray(img), label, 0)
 
 def iou(boxA, boxB):
+    """Intersection Over Union between the areas of 2 rectangles/boxes.
+    """
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[2], boxB[2])
@@ -36,150 +43,162 @@ def iou(boxA, boxB):
     boxBArea = abs((boxB[2] - boxB[0]) * (boxB[3] - boxB[1]))
     return interArea / float(boxAArea + boxBArea - interArea)
 
+def process_frame_buffer(buf, iou_threshold=0.5):
+    """Process small frame buffer to check that face detections have time consistency
+    ie. they appear roughly in the same place when compared to the middle frame.
 
-def process(buf, iou_thr=0.5):
-    debug = False;
-    
-    midx  = len(buf)//2
-    mid   = buf[midx].copy()
-    boxes = mid['boxes'].copy()
-    mid['boxes'] = []
+    Args:
+        buf: list of dicts with frame data.
+        iou_threshold: intersection over union - threshold for a match.
+    """
+    # Extract the middle frame against which we'll compare the other frames
+    midx  = len(buf) // 2
+    mid_frame = buf[midx].copy()
+    other_frames = buf[:midx] + buf[(midx + 1):]
+    ok_mid_boxes = []
 
-    for b in boxes:
-        bx = b['box']
-        if debug:
-            print(mid['label'], bx)
+    # Loop to check that every other frame in buffer has a matching box, when
+    # compared to the target middle frame. If yes: keep it!
+    for mid_box_info in mid_frame["boxes"]:
         keep = True
-        for i in range(len(buf)):
-            if i==midx:
-                continue
+        for other_frame in other_frames:
             found = False
-            for c in buf[i]['boxes']:
-                cx = c['box']
-                fx = ''
-                iu = iou(bx, cx)
-                if iu>iou_thr:
+            for other_box_info in other_frame["boxes"]:
+                iu = iou(mid_box_info["box"], other_box_info["box"])
+                if iu > iou_threshold:
                     found = True
-                    fx = 'match'
-                if debug:
-                    print(' ', i, buf[i]['label'], cx, iu, fx)
-                if found:
                     break
             if not found:
                 keep = False
                 break
-        if debug:
-            print(' ', 'found' if keep else 'not found')
         if keep:
-           mid['boxes'].append(b) 
-            
-    if debug:
-        print()
-    
-    return mid
+            ok_mid_boxes.append(mid_box_info)
 
+    mid_frame["boxes"] = ok_mid_boxes
+    return mid_frame
 
-def process_video(file, beg = 0, end = -1, margin = 2, iou = 0.9):
-    debug = False
-    
-    label,_ = os.path.splitext(os.path.basename(file))
-    cap = cv2.VideoCapture(file)
-    buf = []
-    f = 0
-    while True:
-        skip = f<beg-margin
-        proc = len(buf)==2*margin
-        stop = end>=0 and f>=end+margin
-        msg = 'skipping' if skip else 'stopping' if stop else \
-            'processing' if proc else 'buffering'
-        flabel = label+':'+str(f)
-        f += 1
-        if debug:
-            print(flabel, msg)
-        if stop:
-            break
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if skip:
-            continue
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        ff = process_frame(rgb, flabel)
-        ff['frame'] = f-1
-        #save_images(ff, False, True)
-        print_features(ff)
-        buf.append(ff)
-        if len(buf)==2*margin+1:
-            fx = process(buf)
-            for b in fx['boxes']:
-                b['label'] = 'kept-'+b['label']
-            save_images(fx, True, True)
-            print_features(fx)
-            buf = buf[1:]
-        
-    cap.release()
-
-
-def process_frame(npimg, label_f):
+def process_frame(npimg, label, index):
+    """Process a single video frame and find appearances of faces in it.
+    """
     img_shape = npimg.shape
     bbs = detector.detect_faces(npimg)
     det = np.array([utils.fix_box(b['box']) for b in bbs])
-    det_arr = []
-    for i in range(len(bbs)):
-        det_arr.append(np.squeeze(det[i]))
+    det_arr = [np.squeeze(d) for d in det]
 
     img  = Image.fromarray(npimg)
     imgb = img.copy()
     draw = ImageDraw.Draw(imgb)
 
-    ret = { 'label': label_f, 'image': img, 'boxed': imgb }
-    arr = []
-    
+    # Boxed = same image with white boxes around faces (drawn below...)
+    frame_data = {"label": label, "index": index, "image": img, "boxed": imgb}
+    boxes_metadata = []
+
     for i, det in enumerate(det_arr):
-        info = {}
         det = np.squeeze(utils.xywh2rect(*det))
         draw.rectangle(det.tolist(), fill=None, outline=None)
-        bb = np.zeros(4, dtype=np.int32)
-        bb[0] = np.maximum(det[0] - margin / 2, 0)
-        bb[1] = np.maximum(det[1] - margin / 2, 0)
-        bb[2] = np.minimum(det[2] + margin / 2, img_shape[1])
-        bb[3] = np.minimum(det[3] + margin / 2, img_shape[0])
-        cropped = img.crop((bb[0], bb[1], bb[2], bb[3]))
-        scaled = np.array(cropped
-                          .resize((image_size, image_size),
-                                  resample=Image.BILINEAR)
-                          .convert('L'))
-        label = label_f+'_{}_{}_{}_{}'.format(bb[0], bb[1], bb[2], bb[3])
-        scaledx = np.array(cropped
-                          .resize((image_size, image_size),
-                                  resample=Image.BILINEAR))
-        scaledx = scaledx.reshape(-1, image_size, image_size, 3)
-        emb = utils.get_embedding(facenet, scaledx[0])
 
-        info['box']      = bb 
-        info['crop']     = cropped
-        info['scaled']   = scaled
-        info['label']    = label 
-        info['features'] = emb
-        arr.append(info)
+        # Rectangle: x1, y1, x2, y2
+        rect = np.array([
+            np.maximum(det[0] - CROP_MARGIN / 2, 0),
+            np.maximum(det[1] - CROP_MARGIN / 2, 0),
+            np.minimum(det[2] + CROP_MARGIN / 2, img_shape[1]),
+            np.minimum(det[3] + CROP_MARGIN / 2, img_shape[0]),
+        ]).astype(np.int32)
 
-    ret['boxes'] = arr
-    return ret
-        
+        # Crop onto face only
+        cropped = img.crop(tuple(rect))
+        resized = cropped.resize((FACE_IMAGE_SIZE, FACE_IMAGE_SIZE), resample=Image.BILINEAR)
+        scaled = np.array(resized.convert('L'))
 
-def print_features(ff):
-    for b in ff['boxes']:
-        print(' '.join([str(x) for x in b['features']]), b['label'])
+        # Get face embedding vector via facenet model
+        scaledx = np.array(resized)
+        scaledx = scaledx.reshape(-1, FACE_IMAGE_SIZE, FACE_IMAGE_SIZE, 3)
+        embedding = utils.get_embedding(facenet, scaledx[0])
 
+        # Store meta + image data about the face rectangle
+        box_info = {
+            "box": rect,
+            "scaled": scaled,
+            "label": label + '_{}_{}_{}_{}'.format(*rect),
+            "features": embedding,
+        }
+        boxes_metadata.append(box_info)
 
-def save_images(ff, s, z):
-    if s:
-        for b in ff['boxes']:
-            Image.fromarray(b['scaled']).save(b['label']+'.jpeg')
-    if z:
-        ff['boxed'].save(ff['label']+'_boxed.jpeg')
+    frame_data["boxes"] = boxes_metadata
+    return frame_data
 
-        
+def save_face_features(frame_data, out_file):
+    for box_info in frame_data['boxes']:
+        out_file.write(f"{frame_data['label']},")
+        out_file.write(f"{box_info['label']},")
+        out_file.write(",".join(map(str, box_info["features"])))
+        out_file.write("\n")
+
+def save_frame_images(frame_data, save_face_boxes, save_boxed_frame, out_dir):
+    if save_face_boxes:
+        for box_info in frame_data['boxes']:
+            path = f"{out_dir}/{box_info['label']}.jpeg"
+            Image.fromarray(box_info['scaled']).save(path)
+    if save_boxed_frame:
+        path = f"{out_dir}/{frame_data['label']}_boxed.jpeg"
+        frame_data['boxed'].save(path)
+
+def process_video(file, n_shards=256, shard_i=0, save_every=5, margin=2, iou_threshold=0.5):
+    """Process entire video and extract face boxes.
+    """
+    assert shard_i < n_shards and shard_i >= 0, "Bad shard index."
+
+    cap = cv2.VideoCapture(file)
+    n_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+
+    shard_len = (n_total_frames + n_shards - 1) // n_shards
+    beg = shard_len * shard_i
+    end = beg + shard_len # not inclusive
+
+    label, _ = os.path.splitext(os.path.basename(file))
+    features_path = f"{FEATURES_OUT_PATH}/features_{label}_{beg}-{end}.txt"
+    features_file = open(features_path, mode="w")
+    buf = []
+    max_buffer_size = 2 * margin + 1
+
+    print(f"Movie file: {os.path.basename(file)}")
+    print(f"Total length: {(n_total_frames / fps / 3600):.1f}h ({fps} fps)")
+    print(f"Shard {(shard_i + 1)} / {n_shards}, len: {shard_len} frames")
+
+    beg_with_margin = max(beg - margin, 0)
+    end_with_margin = min(end + margin, n_total_frames)
+    assert cap.set(cv2.CAP_PROP_POS_FRAMES, beg_with_margin), \
+        f"Couldn't set start frame to: {beg_with_margin}"
+
+    for f in range(beg_with_margin, end_with_margin):
+        ret, frame = cap.read()
+
+        if not ret:
+            break
+
+        frame_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_label = label + ':' + str(f)
+        frame_data = process_frame(frame_img, frame_label, f)
+
+        # Store frame data in a small buffer that we'll process all at once
+        buf.append(frame_data)
+
+        # Extract good face boxes from middle frame, save those
+        if len(buf) == max_buffer_size:
+            mid_frame_index = f - margin
+            if mid_frame_index % save_every == 0:
+                middle_frame = process_frame_buffer(buf, iou_threshold)
+                for box_info in middle_frame["boxes"]:
+                    box_info["label"] = "kept-" + box_info["label"]
+                if len(middle_frame["boxes"]) > 0:
+                    save_frame_images(middle_frame, True, True, IMAGE_OUT_PATH)
+                    save_face_features(middle_frame, features_file)
+            buf.pop(0)
+
+    features_file.close()
+    cap.release()
+
 if __name__ == "__main__":
     a = sys.argv
     _, ext = os.path.splitext(os.path.basename(a[1]))
@@ -187,12 +206,11 @@ if __name__ == "__main__":
         for f in a[1:]:
             ff = process_image(f)
             # print(ff)
-            print_features(ff)
+            # print_features(ff)
             save_images(ff, True, True)
     if ext in ['.mpeg', '.mpg', '.mp4', '.avi', '.wmv']:
-        if len(a)!=4:
+        if len(a) != 4:
             print(a[0],
-                  ': three arguments needed: file.mp4 begin_frame end_frame')
+                  ': three arguments needed: file.mp4 n_shards shard_index')
             exit(1)
-        ff = process_video(a[1], beg=int(a[2]), end=int(a[3]))
-        
+        process_video(a[1], n_shards=int(a[2]), shard_i=int(a[3]))
