@@ -1,26 +1,25 @@
-#! /usr/bin/env python3
-
-import mtcnn
-#import imageio
-import face_utils
-import numpy as np
-import utils
 import os
 import sys
+import argparse
 from collections import namedtuple
+
+import cv2
+import mtcnn
+import numpy as np
 import tensorflow
 from PIL import Image, ImageDraw
-import cv2
+
+import face_utils
+import utils
 
 CROP_MARGIN = 0
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
 MIN_FACE_SIZE = 80  # minimum detection size
 
-# We'll save face images and latent vector features here:
-IMAGE_OUT_PATH = "./images"
-FEATURES_OUT_PATH = "./features"
-
-Options = namedtuple("Options", ["n_shards", "shard_i", "save_every", "margin", "iou_threshold"])
+Options = namedtuple(
+    "Options",
+    ["out_path", "n_shards", "shard_i", "save_every", "margin", "iou_threshold"],
+)
 
 def process_image(file):
     label,_ = os.path.splitext(os.path.basename(file))
@@ -153,8 +152,8 @@ def process_video(file, opt: Options):
     end = beg + shard_len # not inclusive
 
     label, _ = os.path.splitext(os.path.basename(file))
-    features_dir = f"./{label}-data/features"
-    images_dir = f"./{label}-data/images"
+    features_dir = f"{opt.out_path}/{label}-data/features"
+    images_dir = f"{opt.out_path}/{label}-data/images"
     os.makedirs(features_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
     features_path = f"{features_dir}/features_{label}_{beg}-{end}.txt"
@@ -198,7 +197,7 @@ def process_video(file, opt: Options):
                 if len(middle_frame["boxes"]) > 0:
                     saved_frames_count += 1
                     saved_boxes_count += len(middle_frame["boxes"])
-                    save_frame_images(middle_frame, True, True, images_dir)
+                    save_frame_images(middle_frame, True, False, images_dir)
                     save_face_features(middle_frame, features_file)
             buf.pop(0)
 
@@ -207,32 +206,28 @@ def process_video(file, opt: Options):
     print(f"Saved {saved_boxes_count} boxes from {saved_frames_count} different frames.")
 
 if __name__ == "__main__":
-    os.makedirs(IMAGE_OUT_PATH, exist_ok=True)
-    os.makedirs(FEATURES_OUT_PATH, exist_ok=True)
+    parser = argparse.ArgumentParser(allow_abbrev=True)
+    parser.add_argument("--n-shards", type=int, default=256)
+    parser.add_argument("--shard-i", type=int, required=True)
+    parser.add_argument("--save-every", type=int, default=5)
+    parser.add_argument("--margin", type=int, default=2)
+    parser.add_argument("--iou-threshold", type=float, default=0.75)
+    parser.add_argument("--out-path", type=str, default=".")
+    parser.add_argument("file")
+    args = parser.parse_args()
 
     facenet = tensorflow.keras.models.load_model('facenet_keras.h5')
     facenet.load_weights('facenet_keras_weights.h5')
     detector = mtcnn.MTCNN(min_face_size=MIN_FACE_SIZE)
 
-    a = sys.argv
-    _, ext = os.path.splitext(os.path.basename(a[1]))
-    if ext in ['.jpg', '.jpeg', '.png']:
-        for f in a[1:]:
-            ff = process_image(f)
-            # print(ff)
-            # print_features(ff)
-            save_images(ff, True, True)
+    _, ext = os.path.splitext(os.path.basename(args.file))
     if ext in ['.mpeg', '.mpg', '.mp4', '.avi', '.wmv']:
-        if len(a) != 4:
-            print(a[0],
-                  ': three arguments needed: file.mp4 n_shards shard_index')
-            exit(1)
-
         options = Options(
-            n_shards=int(a[2]),
-            shard_i=int(a[3]),
-            save_every=5,
-            margin=2,
-            iou_threshold=0.75,
+            n_shards=args.n_shards,
+            shard_i=args.shard_i,
+            save_every=args.save_every,
+            margin=args.margin,
+            iou_threshold=args.iou_threshold,
+            out_path=args.out_path,
         )
-        process_video(a[1], options)
+        process_video(args.file, options)
