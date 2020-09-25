@@ -7,6 +7,7 @@ import numpy as np
 import utils
 import os
 import sys
+from collections import namedtuple
 import tensorflow
 from PIL import Image, ImageDraw
 import cv2
@@ -18,13 +19,8 @@ MIN_FACE_SIZE = 80  # minimum detection size
 # We'll save face images and latent vector features here:
 IMAGE_OUT_PATH = "./images"
 FEATURES_OUT_PATH = "./features"
-os.makedirs(IMAGE_OUT_PATH, exist_ok=True)
-os.makedirs(FEATURES_OUT_PATH, exist_ok=True)
 
-facenet = tensorflow.keras.models.load_model('facenet_keras.h5')
-facenet.load_weights('facenet_keras_weights.h5')
-detector = mtcnn.MTCNN(min_face_size=MIN_FACE_SIZE)
-
+Options = namedtuple("Options", ["n_shards", "shard_i", "save_every", "margin", "iou_threshold"])
 
 def process_image(file):
     label,_ = os.path.splitext(os.path.basename(file))
@@ -143,34 +139,42 @@ def save_frame_images(frame_data, save_face_boxes, save_boxed_frame, out_dir):
         path = f"{out_dir}/{frame_data['label']}_boxed.jpeg"
         frame_data['boxed'].save(path)
 
-def process_video(file, n_shards=256, shard_i=0, save_every=5, margin=2, iou_threshold=0.5):
+def process_video(file, opt: Options):
     """Process entire video and extract face boxes.
     """
-    assert shard_i < n_shards and shard_i >= 0, "Bad shard index."
+    assert opt.shard_i < opt.n_shards and opt.shard_i >= 0, "Bad shard index."
 
     cap = cv2.VideoCapture(file)
     n_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
 
-    shard_len = (n_total_frames + n_shards - 1) // n_shards
-    beg = shard_len * shard_i
+    shard_len = (n_total_frames + opt.n_shards - 1) // opt.n_shards
+    beg = shard_len * opt.shard_i
     end = beg + shard_len # not inclusive
 
     label, _ = os.path.splitext(os.path.basename(file))
-    features_path = f"{FEATURES_OUT_PATH}/features_{label}_{beg}-{end}.txt"
+    features_dir = f"./{label}-data/features"
+    images_dir = f"./{label}-data/images"
+    os.makedirs(features_dir, exist_ok=True)
+    os.makedirs(images_dir, exist_ok=True)
+    features_path = f"{features_dir}/features_{label}_{beg}-{end}.txt"
     features_file = open(features_path, mode="w")
+
     buf = []
-    max_buffer_size = 2 * margin + 1
+    max_buffer_size = 2 * opt.margin + 1
 
     print(f"Movie file: {os.path.basename(file)}")
     print(f"Total length: {(n_total_frames / fps / 3600):.1f}h ({fps} fps)")
-    print(f"Shard {(shard_i + 1)} / {n_shards}, len: {shard_len} frames")
+    print(f"Shard {(opt.shard_i + 1)} / {opt.n_shards}, len: {shard_len} frames")
+    print(f"Processing frames: {beg} - {end} (max: {n_total_frames})")
 
-    beg_with_margin = max(beg - margin, 0)
-    end_with_margin = min(end + margin, n_total_frames)
+    beg_with_margin = max(beg - opt.margin, 0)
+    end_with_margin = min(end + opt.margin, n_total_frames)
     assert cap.set(cv2.CAP_PROP_POS_FRAMES, beg_with_margin), \
         f"Couldn't set start frame to: {beg_with_margin}"
 
+    saved_frames_count = 0
+    saved_boxes_count = 0
     for f in range(beg_with_margin, end_with_margin):
         ret, frame = cap.read()
 
@@ -178,7 +182,7 @@ def process_video(file, n_shards=256, shard_i=0, save_every=5, margin=2, iou_thr
             break
 
         frame_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_label = label + ':' + str(f)
+        frame_label = label + ':' + str(f).zfill(6)
         frame_data = process_frame(frame_img, frame_label, f)
 
         # Store frame data in a small buffer that we'll process all at once
@@ -186,20 +190,30 @@ def process_video(file, n_shards=256, shard_i=0, save_every=5, margin=2, iou_thr
 
         # Extract good face boxes from middle frame, save those
         if len(buf) == max_buffer_size:
-            mid_frame_index = f - margin
-            if mid_frame_index % save_every == 0:
-                middle_frame = process_frame_buffer(buf, iou_threshold)
+            mid_frame_index = f - opt.margin
+            if mid_frame_index % opt.save_every == 0:
+                middle_frame = process_frame_buffer(buf, opt.iou_threshold)
                 for box_info in middle_frame["boxes"]:
                     box_info["label"] = "kept-" + box_info["label"]
                 if len(middle_frame["boxes"]) > 0:
-                    save_frame_images(middle_frame, True, True, IMAGE_OUT_PATH)
+                    saved_frames_count += 1
+                    saved_boxes_count += len(middle_frame["boxes"])
+                    save_frame_images(middle_frame, True, True, images_dir)
                     save_face_features(middle_frame, features_file)
             buf.pop(0)
 
     features_file.close()
     cap.release()
+    print(f"Saved {saved_boxes_count} boxes from {saved_frames_count} different frames.")
 
 if __name__ == "__main__":
+    os.makedirs(IMAGE_OUT_PATH, exist_ok=True)
+    os.makedirs(FEATURES_OUT_PATH, exist_ok=True)
+
+    facenet = tensorflow.keras.models.load_model('facenet_keras.h5')
+    facenet.load_weights('facenet_keras_weights.h5')
+    detector = mtcnn.MTCNN(min_face_size=MIN_FACE_SIZE)
+
     a = sys.argv
     _, ext = os.path.splitext(os.path.basename(a[1]))
     if ext in ['.jpg', '.jpeg', '.png']:
@@ -213,4 +227,12 @@ if __name__ == "__main__":
             print(a[0],
                   ': three arguments needed: file.mp4 n_shards shard_index')
             exit(1)
-        process_video(a[1], n_shards=int(a[2]), shard_i=int(a[3]))
+
+        options = Options(
+            n_shards=int(a[2]),
+            shard_i=int(a[3]),
+            save_every=5,
+            margin=2,
+            iou_threshold=0.75,
+        )
+        process_video(a[1], options)
