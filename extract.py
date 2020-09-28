@@ -4,17 +4,16 @@ import argparse
 from collections import namedtuple
 
 import cv2
-import mtcnn
 import numpy as np
 import tensorflow
 from PIL import Image, ImageDraw
 
 import face_utils
 import utils
+from detector import MTCNNDetector, RetinaFaceDetector
 
 CROP_MARGIN = 0
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
-MIN_FACE_SIZE = 80  # minimum detection size
 
 Options = namedtuple(
     "Options",
@@ -76,9 +75,6 @@ def process_frame(npimg, label, index):
     """Process a single video frame and find appearances of faces in it.
     """
     img_shape = npimg.shape
-    bbs = detector.detect_faces(npimg)
-    det = np.array([utils.fix_box(b['box']) for b in bbs])
-    det_arr = [np.squeeze(d) for d in det]
 
     img  = Image.fromarray(npimg)
     imgb = img.copy()
@@ -88,17 +84,14 @@ def process_frame(npimg, label, index):
     frame_data = {"label": label, "index": index, "image": img, "boxed": imgb}
     boxes_metadata = []
 
-    for i, det in enumerate(det_arr):
-        det = np.squeeze(utils.xywh2rect(*det))
-        draw.rectangle(det.tolist(), fill=None, outline=None)
+    faces = detector.detect(npimg)
+    for i, face in enumerate(faces):
+        draw.rectangle(face["box"], fill=None, outline=None)
 
-        # Rectangle: x1, y1, x2, y2
-        rect = np.array([
-            np.maximum(det[0] - CROP_MARGIN / 2, 0),
-            np.maximum(det[1] - CROP_MARGIN / 2, 0),
-            np.minimum(det[2] + CROP_MARGIN / 2, img_shape[1]),
-            np.minimum(det[3] + CROP_MARGIN / 2, img_shape[0]),
-        ]).astype(np.int32)
+        # Rectangle: x1, y1, x2, y2 + margin for output crop images
+        rect = np.array(face["box"]).astype(np.int32)
+        rect[:2] = np.maximum(rect[:2] - CROP_MARGIN, [0, 0])
+        rect[2:] = np.minimum(rect[2:] + CROP_MARGIN, [img_shape[1], img_shape[0]])
 
         # Crop onto face only
         cropped = img.crop(tuple(rect))
@@ -197,7 +190,7 @@ def process_video(file, opt: Options):
                 if len(middle_frame["boxes"]) > 0:
                     saved_frames_count += 1
                     saved_boxes_count += len(middle_frame["boxes"])
-                    save_frame_images(middle_frame, True, False, images_dir)
+                    save_frame_images(middle_frame, True, True, images_dir)
                     save_face_features(middle_frame, features_file)
             buf.pop(0)
 
@@ -218,7 +211,10 @@ if __name__ == "__main__":
 
     facenet = tensorflow.keras.models.load_model('facenet_keras.h5')
     facenet.load_weights('facenet_keras_weights.h5')
-    detector = mtcnn.MTCNN(min_face_size=MIN_FACE_SIZE)
+
+    # Comment out 1, same wrapped api!
+    # detector = MTCNNDetector()
+    detector = RetinaFaceDetector()
 
     _, ext = os.path.splitext(os.path.basename(args.file))
     if ext in ['.mpeg', '.mpg', '.mp4', '.avi', '.wmv']:
