@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+import json
 from collections import namedtuple
 
 import cv2
@@ -12,18 +13,14 @@ import face_utils
 import utils
 from detector import MTCNNDetector, RetinaFaceDetector
 
+MIN_TRAJECTORY_LEN = 5  # frames
 CROP_MARGIN = 0
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
 
 Options = namedtuple(
     "Options",
-    ["out_path", "n_shards", "shard_i", "save_every", "margin", "iou_threshold"],
+    ["out_path", "n_shards", "shard_i", "save_every", "iou_threshold"],
 )
-
-def process_image(file):
-    label,_ = os.path.splitext(os.path.basename(file))
-    img = Image.open(file).convert('RGB')
-    return process_frame(np.asarray(img), label, 0)
 
 def iou(boxA, boxB):
     """Intersection Over Union between the areas of 2 rectangles/boxes.
@@ -37,99 +34,49 @@ def iou(boxA, boxB):
     boxBArea = abs((boxB[2] - boxB[0]) * (boxB[3] - boxB[1]))
     return interArea / float(boxAArea + boxBArea - interArea)
 
-def process_frame_buffer(buf, iou_threshold=0.5):
-    """Process small frame buffer to check that face detections have time consistency
-    ie. they appear roughly in the same place when compared to the middle frame.
+def save_trajectory(file, trajectory, ti):
+    if len(trajectory["faces"]) < MIN_TRAJECTORY_LEN:
+        return False
+    # Write out .jsonl
+    bbs = [face["box"] for face in trajectory["faces"]]
+    out_obj = {"start": trajectory["start"], "len": len(trajectory["faces"]), "bbs": bbs}
+    json.dump(out_obj, file, indent=None, separators=(",", ":"))
+    file.write("\n")
+    return True
 
-    Args:
-        buf: list of dicts with frame data.
-        iou_threshold: intersection over union - threshold for a match.
+def process_frame(frame_data, trajectories, features_file, images_dir):
+    """Save faces + features from a frame, and creating face embeddings.
     """
-    # Extract the middle frame against which we'll compare the other frames
-    midx  = len(buf) // 2
-    mid_frame = buf[midx].copy()
-    other_frames = buf[:midx] + buf[(midx + 1):]
-    ok_mid_boxes = []
+    # Filter to faces with a valid trajectory (len > MIN)
+    frame_data["faces"] = [
+        f for f in frame_data["faces"]
+        if len(trajectories[f["trajectory"]]["faces"]) >= MIN_TRAJECTORY_LEN
+    ]
 
-    # Loop to check that every other frame in buffer has a matching box, when
-    # compared to the target middle frame. If yes: keep it!
-    for mid_box_info in mid_frame["boxes"]:
-        keep = True
-        for other_frame in other_frames:
-            found = False
-            for other_box_info in other_frame["boxes"]:
-                iu = iou(mid_box_info["box"], other_box_info["box"])
-                if iu > iou_threshold:
-                    found = True
-                    break
-            if not found:
-                keep = False
-                break
-        if keep:
-            ok_mid_boxes.append(mid_box_info)
-
-    mid_frame["boxes"] = ok_mid_boxes
-    return mid_frame
-
-def process_frame(npimg, label, index):
-    """Process a single video frame and find appearances of faces in it.
-    """
-    img_shape = npimg.shape
-
-    img  = Image.fromarray(npimg)
-    imgb = img.copy()
-    draw = ImageDraw.Draw(imgb)
-
-    # Boxed = same image with white boxes around faces (drawn below...)
-    frame_data = {"label": label, "index": index, "image": img, "boxed": imgb}
-    boxes_metadata = []
-
-    faces = detector.detect(npimg)
-    for i, face in enumerate(faces):
-        draw.rectangle(face["box"], fill=None, outline=None)
-
-        # Rectangle: x1, y1, x2, y2 + margin for output crop images
-        rect = np.array(face["box"]).astype(np.int32)
-        rect[:2] = np.maximum(rect[:2] - CROP_MARGIN, [0, 0])
-        rect[2:] = np.minimum(rect[2:] + CROP_MARGIN, [img_shape[1], img_shape[0]])
-
+    img = Image.fromarray(frame_data["img_np"])
+    for face in frame_data["faces"]:
         # Crop onto face only
-        cropped = img.crop(tuple(rect))
+        cropped = img.crop(tuple(face["box"]))
         resized = cropped.resize((FACE_IMAGE_SIZE, FACE_IMAGE_SIZE), resample=Image.BILINEAR)
-        scaled = np.array(resized.convert('L'))
 
         # Get face embedding vector via facenet model
         scaledx = np.array(resized)
         scaledx = scaledx.reshape(-1, FACE_IMAGE_SIZE, FACE_IMAGE_SIZE, 3)
         embedding = utils.get_embedding(facenet, scaledx[0])
 
-        # Store meta + image data about the face rectangle
-        box_info = {
-            "box": rect,
-            "scaled": scaled,
-            "label": label + '_{}_{}_{}_{}'.format(*rect),
-            "features": embedding,
-        }
-        boxes_metadata.append(box_info)
+        # Save face image and features
+        box_label = frame_data["label"] + "_{}_{}_{}_{}".format(*face["box"])
+        resized.save(f"{images_dir}/kept-{box_label}.jpeg")
+        json.dump({
+            "frame": frame_data["index"],
+            "label": box_label,
+            "embedding": embedding.tolist(),
+            "box": face["box"],
+            "keypoints": face["keypoints"],
+        }, features_file, indent=None, separators=(",", ":"))
+        features_file.write("\n")
 
-    frame_data["boxes"] = boxes_metadata
-    return frame_data
-
-def save_face_features(frame_data, out_file):
-    for box_info in frame_data['boxes']:
-        out_file.write(f"{frame_data['label']},")
-        out_file.write(f"{box_info['label']},")
-        out_file.write(",".join(map(str, box_info["features"])))
-        out_file.write("\n")
-
-def save_frame_images(frame_data, save_face_boxes, save_boxed_frame, out_dir):
-    if save_face_boxes:
-        for box_info in frame_data['boxes']:
-            path = f"{out_dir}/{box_info['label']}.jpeg"
-            Image.fromarray(box_info['scaled']).save(path)
-    if save_boxed_frame:
-        path = f"{out_dir}/{frame_data['label']}_boxed.jpeg"
-        frame_data['boxed'].save(path)
+    return len(frame_data["faces"])
 
 def process_video(file, opt: Options):
     """Process entire video and extract face boxes.
@@ -142,31 +89,37 @@ def process_video(file, opt: Options):
 
     shard_len = (n_total_frames + opt.n_shards - 1) // opt.n_shards
     beg = shard_len * opt.shard_i
-    end = beg + shard_len # not inclusive
+    end = min(beg + shard_len, n_total_frames)  # not inclusive
+    assert cap.set(cv2.CAP_PROP_POS_FRAMES, beg), \
+        f"Couldn't set start frame to: {beg}"
 
+    # We'll write (face) images, features and trajectories to disk
     label, _ = os.path.splitext(os.path.basename(file))
     features_dir = f"{opt.out_path}/{label}-data/features"
+    trajectories_dir = f"{opt.out_path}/{label}-data/trajectories"
     images_dir = f"{opt.out_path}/{label}-data/images"
     os.makedirs(features_dir, exist_ok=True)
+    os.makedirs(trajectories_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
-    features_path = f"{features_dir}/features_{label}_{beg}-{end}.txt"
+    features_path = f"{features_dir}/features_{label}_{beg}-{end}.jsonl"
     features_file = open(features_path, mode="w")
-
-    buf = []
-    max_buffer_size = 2 * opt.margin + 1
+    trajectories_path = f"{trajectories_dir}/trajectories_{label}_{beg}-{end}.jsonl"
+    trajectories_file = open(trajectories_path, mode="w")
 
     print(f"Movie file: {os.path.basename(file)}")
     print(f"Total length: {(n_total_frames / fps / 3600):.1f}h ({fps} fps)")
     print(f"Shard {(opt.shard_i + 1)} / {opt.n_shards}, len: {shard_len} frames")
     print(f"Processing frames: {beg} - {end} (max: {n_total_frames})")
 
-    beg_with_margin = max(beg - opt.margin, 0)
-    end_with_margin = min(end + opt.margin, n_total_frames)
-    assert cap.set(cv2.CAP_PROP_POS_FRAMES, beg_with_margin), \
-        f"Couldn't set start frame to: {beg_with_margin}"
-
+    buf = []
     saved_frames_count = 0
     saved_boxes_count = 0
+    saved_traj_count = 0
+
+    # Trajectories = same face across multiple frames
+    max_ti = -1
+    trajectories = {}
+
     for f in range(beg_with_margin, end_with_margin):
         ret, frame = cap.read()
 
@@ -174,55 +127,94 @@ def process_video(file, opt: Options):
             break
 
         frame_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_label = label + ':' + str(f).zfill(6)
-        frame_data = process_frame(frame_img, frame_label, f)
+        faces = detector.detect(frame_img)
+        buf.append({
+            "index": f,
+            "img_np": frame_img,
+            "faces": faces,
+            "label": label + ":" + str(f).zfill(6),
+        })
 
-        # Store frame data in a small buffer that we'll process all at once
-        buf.append(frame_data)
+        # Are faces in a known trajectory?
+        # Active trajectory: the last face is from the previous frame processed
+        active_trajectories = {
+            id: traj for id, traj in trajectories.items()
+            if traj["start"] + len(traj["faces"]) == f
+        }
+        for face in faces:
+            found_ti = None
+            best_iou = -1
+            for ti, traj in active_trajectories.items():
+                iou_value = iou(face["box"], traj["faces"][-1]["box"])
+                if iou_value > best_iou:
+                    found_ti = ti
+                    best_iou = iou_value
+
+            if best_iou > opt.iou_threshold:
+                trajectories[found_ti]["faces"].append(face)
+                face["trajectory"] = found_ti
+            else:
+                # create new trajectory
+                max_ti += 1
+                trajectories[max_ti] = {"faces": [face], "start": f}
+                face["trajectory"] = max_ti
+
+        if len(set([face["trajectory"] for face in faces])) != len(faces):
+            print("WARNING: Trajectory mismatch")
+
+        # Clean up expired trajectories
+        for ti in list(trajectories.keys()):
+            traj = trajectories[ti]
+            if traj["start"] + len(traj["faces"]) < f - MIN_TRAJECTORY_LEN:
+                saved_traj_count += int(save_trajectory(trajectories_file, traj, ti))
+                del trajectories[ti]
 
         # Extract good face boxes from middle frame, save those
-        if len(buf) == max_buffer_size:
-            mid_frame_index = f - opt.margin
-            if mid_frame_index % opt.save_every == 0:
-                middle_frame = process_frame_buffer(buf, opt.iou_threshold)
-                for box_info in middle_frame["boxes"]:
-                    box_info["label"] = "kept-" + box_info["label"]
-                if len(middle_frame["boxes"]) > 0:
-                    saved_frames_count += 1
-                    saved_boxes_count += len(middle_frame["boxes"])
-                    save_frame_images(middle_frame, True, True, images_dir)
-                    save_face_features(middle_frame, features_file)
-            buf.pop(0)
+        if len(buf) == MIN_TRAJECTORY_LEN:
+            frame_data = buf.pop(0)
+            if frame_data["index"] % opt.save_every == 0:
+                n_saved_faces = process_frame(buf.pop(0), trajectories, features_file, images_dir)
+                saved_boxes_count += n_saved_faces
+                saved_frames_count += int(n_saved_faces > 0)
+
+    # Save remaining frames and trajectories
+    for frame_data in buf:
+        if frame_data["index"] % opt.save_every == 0:
+            n_saved_faces = process_frame(frame_data, trajectories, features_file, images_dir)
+            saved_boxes_count += n_saved_faces
+            saved_frames_count += int(n_saved_faces > 0)
+    for ti, traj in trajectories.items():
+        saved_traj_count += int(save_trajectory(trajectories_file, traj, ti))
 
     features_file.close()
+    trajectories_file.close()
     cap.release()
-    print(f"Saved {saved_boxes_count} boxes from {saved_frames_count} different frames.")
+    print(f"Saved {saved_boxes_count} boxes from {saved_frames_count} different frames")
+    print(f"and {saved_traj_count} trajectories.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(allow_abbrev=True)
     parser.add_argument("--n-shards", type=int, default=256)
     parser.add_argument("--shard-i", type=int, required=True)
     parser.add_argument("--save-every", type=int, default=5)
-    parser.add_argument("--margin", type=int, default=2)
-    parser.add_argument("--iou-threshold", type=float, default=0.75)
+    parser.add_argument("--iou-threshold", type=float, default=0.5)
     parser.add_argument("--out-path", type=str, default=".")
     parser.add_argument("file")
     args = parser.parse_args()
 
-    facenet = tensorflow.keras.models.load_model('facenet_keras.h5')
-    facenet.load_weights('facenet_keras_weights.h5')
+    facenet = tensorflow.keras.models.load_model("facenet_keras.h5")
+    facenet.load_weights("facenet_keras_weights.h5")
 
     # Comment out 1, same wrapped api!
     # detector = MTCNNDetector()
     detector = RetinaFaceDetector()
 
     _, ext = os.path.splitext(os.path.basename(args.file))
-    if ext in ['.mpeg', '.mpg', '.mp4', '.avi', '.wmv']:
+    if ext in [".mpeg", ".mpg", ".mp4", ".avi", ".wmv"]:
         options = Options(
             n_shards=args.n_shards,
             shard_i=args.shard_i,
             save_every=args.save_every,
-            margin=args.margin,
             iou_threshold=args.iou_threshold,
             out_path=args.out_path,
         )
