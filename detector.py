@@ -42,10 +42,10 @@ class RetinaFaceDetector:
         return [{
             "box": [b["x1"], b["y1"], b["x2"], b["y2"]],
             "keypoints": {
-                "left_eye": b["left_eye"],
-                "right_eye": b["right_eye"],
-                "nose": b["nose"],
-                "mouth_left": b["left_lip"],
-                "mouth_right": b["right_lip"],
+                "left_eye": (int(b["left_eye"][0]), int(b["left_eye"][1])),
+                "right_eye": (int(b["right_eye"][0]), int(b["right_eye"][1])),
+                "nose": (int(b["nose"][0]), int(b["nose"][1])),
+                "mouth_left": (int(b["left_lip"][0]), int(b["left_lip"][1])),
+                "mouth_right": (int(b["right_lip"][0]), int(b["right_lip"][1])),
             }
         } for b in bbs]
