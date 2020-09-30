@@ -3,6 +3,7 @@ import sys
 import argparse
 import json
 from collections import namedtuple
+from time import time
 
 import cv2
 import numpy as np
@@ -13,13 +14,12 @@ import face_utils
 import utils
 from detector import MTCNNDetector, RetinaFaceDetector
 
-MIN_TRAJECTORY_LEN = 5  # frames
 CROP_MARGIN = 0
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
 
 Options = namedtuple(
     "Options",
-    ["out_path", "n_shards", "shard_i", "save_every", "iou_threshold"],
+    ["out_path", "n_shards", "shard_i", "save_every", "iou_threshold", "min_trajectory"],
 )
 
 def iou(boxA, boxB):
@@ -34,8 +34,8 @@ def iou(boxA, boxB):
     boxBArea = abs((boxB[2] - boxB[0]) * (boxB[3] - boxB[1]))
     return interArea / float(boxAArea + boxBArea - interArea)
 
-def save_trajectory(file, trajectory, ti):
-    if len(trajectory["faces"]) < MIN_TRAJECTORY_LEN:
+def save_trajectory(file, trajectory, min_trajectory_len):
+    if len(trajectory["faces"]) < min_trajectory_len:
         return False
     # Write out .jsonl
     bbs = [face["box"] for face in trajectory["faces"]]
@@ -44,13 +44,13 @@ def save_trajectory(file, trajectory, ti):
     file.write("\n")
     return True
 
-def process_frame(frame_data, trajectories, features_file, images_dir):
+def process_frame(frame_data, trajectories, features_file, images_dir, min_trajectory_len):
     """Save faces + features from a frame, and creating face embeddings.
     """
     # Filter to faces with a valid trajectory (len > MIN)
     frame_data["faces"] = [
         f for f in frame_data["faces"]
-        if len(trajectories[f["trajectory"]]["faces"]) >= MIN_TRAJECTORY_LEN
+        if len(trajectories[f["trajectory"]]["faces"]) >= min_trajectory_len
     ]
 
     img = Image.fromarray(frame_data["img_np"])
@@ -120,7 +120,7 @@ def process_video(file, opt: Options):
     max_ti = -1
     trajectories = {}
 
-    for f in range(beg_with_margin, end_with_margin):
+    for f in range(beg, end):
         ret, frame = cap.read()
 
         if not ret:
@@ -165,26 +165,30 @@ def process_video(file, opt: Options):
         # Clean up expired trajectories
         for ti in list(trajectories.keys()):
             traj = trajectories[ti]
-            if traj["start"] + len(traj["faces"]) < f - MIN_TRAJECTORY_LEN:
-                saved_traj_count += int(save_trajectory(trajectories_file, traj, ti))
+            if traj["start"] + len(traj["faces"]) < f - opt.min_trajectory:
+                saved_traj_count += int(save_trajectory(trajectories_file, traj, opt.min_trajectory))
                 del trajectories[ti]
 
         # Extract good face boxes from middle frame, save those
-        if len(buf) == MIN_TRAJECTORY_LEN:
+        if len(buf) == opt.min_trajectory:
             frame_data = buf.pop(0)
             if frame_data["index"] % opt.save_every == 0:
-                n_saved_faces = process_frame(buf.pop(0), trajectories, features_file, images_dir)
+                n_saved_faces = process_frame(
+                    buf.pop(0), trajectories, features_file, images_dir, opt.min_trajectory
+                )
                 saved_boxes_count += n_saved_faces
                 saved_frames_count += int(n_saved_faces > 0)
 
     # Save remaining frames and trajectories
     for frame_data in buf:
         if frame_data["index"] % opt.save_every == 0:
-            n_saved_faces = process_frame(frame_data, trajectories, features_file, images_dir)
+            n_saved_faces = process_frame(
+                frame_data, trajectories, features_file, images_dir, opt.min_trajectory
+            )
             saved_boxes_count += n_saved_faces
             saved_frames_count += int(n_saved_faces > 0)
     for ti, traj in trajectories.items():
-        saved_traj_count += int(save_trajectory(trajectories_file, traj, ti))
+        saved_traj_count += int(save_trajectory(trajectories_file, traj, opt.min_trajectory))
 
     features_file.close()
     trajectories_file.close()
@@ -199,8 +203,11 @@ if __name__ == "__main__":
     parser.add_argument("--save-every", type=int, default=5)
     parser.add_argument("--iou-threshold", type=float, default=0.5)
     parser.add_argument("--out-path", type=str, default=".")
+    parser.add_argument("--min-trajectory", type=int, default=5)
     parser.add_argument("file")
     args = parser.parse_args()
+
+    start_time = time()
 
     facenet = tensorflow.keras.models.load_model("facenet_keras.h5")
     facenet.load_weights("facenet_keras_weights.h5")
@@ -216,6 +223,10 @@ if __name__ == "__main__":
             shard_i=args.shard_i,
             save_every=args.save_every,
             iou_threshold=args.iou_threshold,
+            min_trajectory=args.min_trajectory,
             out_path=args.out_path,
         )
         process_video(args.file, options)
+
+        minutes, seconds = divmod(time() - start_time, 60)
+        print(f"Completed in {int(minutes)} minutes, {int(seconds)} seconds.")
