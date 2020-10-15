@@ -10,53 +10,64 @@ import numpy as np
 import tensorflow
 from PIL import Image, ImageDraw
 
-import face_utils
-import utils
+import utils.utils as utils
 from detector import MTCNNDetector, RetinaFaceDetector
+from sort import Sort
 
 CROP_MARGIN = 0
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
 
 Options = namedtuple(
     "Options",
-    ["out_path", "n_shards", "shard_i", "save_every", "iou_threshold", "min_trajectory"],
+    ["out_path", "n_shards", "shard_i", "save_every", "min_trajectory", "max_trajectory_age"],
 )
 
-def iou(boxA, boxB):
-    """Intersection Over Union between the areas of 2 rectangles/boxes.
+def bbox_float_to_int(bbox_float, max_w, max_h):
+    bbox_float = np.maximum(np.round(bbox_float), 0)
+    bbox_float[2] = np.minimum(bbox_float[2], max_w)
+    bbox_float[3] = np.minimum(bbox_float[3], max_h)
+    return [int(c) for c in bbox_float]
+
+def save_trajectories(file, trackers, video_w, video_h):
+    """Save trajectories from all given trackers, to file.
     """
-    xA = max(boxA[0], boxB[0])
-    yA = max(boxA[1], boxB[1])
-    xB = min(boxA[2], boxB[2])
-    yB = min(boxA[3], boxB[3])
-    interArea = abs(max((xB - xA, 0)) * max((yB - yA), 0))
-    boxAArea = abs((boxA[2] - boxA[0]) * (boxA[3] - boxA[1]))
-    boxBArea = abs((boxB[2] - boxB[0]) * (boxB[3] - boxB[1]))
-    return interArea / float(boxAArea + boxBArea - interArea)
+    # Extract trajectories from trackers and write to jsonl
+    for trk in trackers:
+        trajectory = []
+        detected = []
+        for bbox_float, d in trk.history:
+            bbox_int = bbox_float_to_int(bbox_float, video_w, video_h)
+            trajectory.append(bbox_int)
+            detected.append(d)
 
-def save_trajectory(file, trajectory, min_trajectory_len):
-    if len(trajectory["faces"]) < min_trajectory_len:
-        return False
-    # Write out .jsonl
-    bbs = [face["box"] for face in trajectory["faces"]]
-    out_obj = {"start": trajectory["start"], "len": len(trajectory["faces"]), "bbs": bbs}
-    json.dump(out_obj, file, indent=None, separators=(",", ":"))
-    file.write("\n")
-    return True
+        out_obj = {
+            "start": trk.first_frame,
+            "len": len(trajectory),
+            "bbs": trajectory,
+            "detected": detected,
+        }
+        json.dump(out_obj, file, indent=None, separators=(",", ":"))
+        file.write("\n")
 
-def process_frame(frame_data, trajectories, features_file, images_dir, min_trajectory_len):
+    return len(trackers)
+
+def process_frame(frame_data, video_w, video_h, features_file, images_dir, min_trajectory_len):
     """Save faces + features from a frame, and creating face embeddings.
     """
     # Filter to faces with a valid trajectory (len > MIN)
-    frame_data["faces"] = [
-        f for f in frame_data["faces"]
-        if len(trajectories[f["trajectory"]]["faces"]) >= min_trajectory_len
+    valid_faces = [
+        face for face in frame_data["faces"]
+        if multi_tracker.has_valid_tracker(face["detection_id"])
     ]
 
     img = Image.fromarray(frame_data["img_np"])
-    for face in frame_data["faces"]:
+    for face in valid_faces:
+        # Retrieve the bbox filtered by the Kalman filter, instead of actual detection
+        filtered_box = multi_tracker.get_detection_bbox(face["detection_id"])
+        filtered_box = bbox_float_to_int(filtered_box, video_w, video_h)
+
         # Crop onto face only
-        cropped = img.crop(tuple(face["box"]))
+        cropped = img.crop(tuple(filtered_box))
         resized = cropped.resize((FACE_IMAGE_SIZE, FACE_IMAGE_SIZE), resample=Image.BILINEAR)
 
         # Get face embedding vector via facenet model
@@ -65,18 +76,18 @@ def process_frame(frame_data, trajectories, features_file, images_dir, min_traje
         embedding = utils.get_embedding(facenet, scaledx[0])
 
         # Save face image and features
-        box_label = frame_data["label"] + "_{}_{}_{}_{}".format(*face["box"])
+        box_label = frame_data["label"] + "_{}_{}_{}_{}".format(*filtered_box)
         resized.save(f"{images_dir}/kept-{box_label}.jpeg")
         json.dump({
             "frame": frame_data["index"],
             "label": box_label,
             "embedding": embedding.tolist(),
-            "box": face["box"],
+            "box": filtered_box,
             "keypoints": face["keypoints"],
         }, features_file, indent=None, separators=(",", ":"))
         features_file.write("\n")
 
-    return len(frame_data["faces"])
+    return len(valid_faces)
 
 def process_video(file, opt: Options):
     """Process entire video and extract face boxes.
@@ -86,6 +97,8 @@ def process_video(file, opt: Options):
     cap = cv2.VideoCapture(file)
     n_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     shard_len = (n_total_frames + opt.n_shards - 1) // opt.n_shards
     beg = shard_len * opt.shard_i
@@ -116,10 +129,6 @@ def process_video(file, opt: Options):
     saved_boxes_count = 0
     saved_traj_count = 0
 
-    # Trajectories = same face across multiple frames
-    max_ti = -1
-    trajectories = {}
-
     for f in range(beg, end):
         ret, frame = cap.read()
 
@@ -135,46 +144,23 @@ def process_video(file, opt: Options):
             "label": label + ":" + str(f).zfill(6),
         })
 
-        # Are faces in a known trajectory?
-        # Active trajectory: the last face is from the previous frame processed
-        active_trajectories = {
-            id: traj for id, traj in trajectories.items()
-            if traj["start"] + len(traj["faces"]) == f
-        }
-        for face in faces:
-            found_ti = None
-            best_iou = -1
-            for ti, traj in active_trajectories.items():
-                iou_value = iou(face["box"], traj["faces"][-1]["box"])
-                if iou_value > best_iou:
-                    found_ti = ti
-                    best_iou = iou_value
+        # Let the tracker know of new detections
+        detections = np.array([[*f["box"], 0.95] for f in faces]).reshape((-1, 5))
+        detection_ids = multi_tracker.update(detections, frame=f)
+        # Make each face keep a reference to its tracker
+        for i, face in enumerate(faces):
+            face["detection_id"] = detection_ids[i]
 
-            if best_iou > opt.iou_threshold:
-                trajectories[found_ti]["faces"].append(face)
-                face["trajectory"] = found_ti
-            else:
-                # create new trajectory
-                max_ti += 1
-                trajectories[max_ti] = {"faces": [face], "start": f}
-                face["trajectory"] = max_ti
-
-        if len(set([face["trajectory"] for face in faces])) != len(faces):
-            print("WARNING: Trajectory mismatch")
-
-        # Clean up expired trajectories
-        for ti in list(trajectories.keys()):
-            traj = trajectories[ti]
-            if traj["start"] + len(traj["faces"]) < f - opt.min_trajectory:
-                saved_traj_count += int(save_trajectory(trajectories_file, traj, opt.min_trajectory))
-                del trajectories[ti]
+        # Clean up expired trajectories (-> save to file)
+        expired_tracks = multi_tracker.pop_expired(expiry_age=2 * opt.min_trajectory)
+        saved_traj_count += save_trajectories(trajectories_file, expired_tracks, video_w, video_h)
 
         # Extract good face boxes from middle frame, save those
         if len(buf) == opt.min_trajectory:
             frame_data = buf.pop(0)
             if frame_data["index"] % opt.save_every == 0:
                 n_saved_faces = process_frame(
-                    buf.pop(0), trajectories, features_file, images_dir, opt.min_trajectory
+                    frame_data, video_w, video_h, features_file, images_dir, opt.min_trajectory
                 )
                 saved_boxes_count += n_saved_faces
                 saved_frames_count += int(n_saved_faces > 0)
@@ -183,12 +169,13 @@ def process_video(file, opt: Options):
     for frame_data in buf:
         if frame_data["index"] % opt.save_every == 0:
             n_saved_faces = process_frame(
-                frame_data, trajectories, features_file, images_dir, opt.min_trajectory
+                frame_data, video_w, video_h, features_file, images_dir, opt.min_trajectory
             )
             saved_boxes_count += n_saved_faces
             saved_frames_count += int(n_saved_faces > 0)
-    for ti, traj in trajectories.items():
-        saved_traj_count += int(save_trajectory(trajectories_file, traj, opt.min_trajectory))
+
+    expired_tracks = multi_tracker.pop_expired(expiry_age=0)
+    saved_traj_count += save_trajectories(trajectories_file, expired_tracks, video_w, video_h)
 
     features_file.close()
     trajectories_file.close()
@@ -202,19 +189,28 @@ if __name__ == "__main__":
     parser.add_argument("--shard-i", type=int, required=True)
     parser.add_argument("--save-every", type=int, default=5)
     parser.add_argument("--iou-threshold", type=float, default=0.5)
-    parser.add_argument("--out-path", type=str, default=".")
+    parser.add_argument("--out-path", type=str, default="./data")
     parser.add_argument("--min-trajectory", type=int, default=5)
+    parser.add_argument("--max-trajectory-age", type=int, default=10)
     parser.add_argument("file")
     args = parser.parse_args()
 
     start_time = time()
 
-    facenet = tensorflow.keras.models.load_model("facenet_keras.h5")
-    facenet.load_weights("facenet_keras_weights.h5")
+    # Models found at: https://github.com/D2KLab/Face-Celebrity-Recognition
+    facenet = tensorflow.keras.models.load_model("models/facenet_keras.h5")
+    facenet.load_weights("models/facenet_keras_weights.h5")
 
     # Comment out 1, same wrapped api!
     # detector = MTCNNDetector()
     detector = RetinaFaceDetector()
+
+    # Tracker - SORT. Has nothing to do with sorting
+    multi_tracker = Sort(
+        max_age=args.max_trajectory_age,
+        min_hits=args.min_trajectory,
+        iou_threshold=args.iou_threshold,
+    )
 
     _, ext = os.path.splitext(os.path.basename(args.file))
     if ext in [".mpeg", ".mpg", ".mp4", ".avi", ".wmv"]:
@@ -222,9 +218,9 @@ if __name__ == "__main__":
             n_shards=args.n_shards,
             shard_i=args.shard_i,
             save_every=args.save_every,
-            iou_threshold=args.iou_threshold,
-            min_trajectory=args.min_trajectory,
             out_path=args.out_path,
+            max_trajectory_age=args.max_trajectory_age,
+            min_trajectory=args.min_trajectory,
         )
         process_video(args.file, options)
 
