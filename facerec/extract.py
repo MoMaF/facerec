@@ -129,7 +129,10 @@ def process_video(file, opt: Options):
     saved_boxes_count = 0
     saved_traj_count = 0
 
-    for f in range(beg, end):
+    # Run past the end to allow easier merging with other shards
+    end_with_overlap = min(end + opt.max_trajectory_age, n_total_frames)
+
+    for f in range(beg, end_with_overlap):
         ret, frame = cap.read()
 
         if not ret:
@@ -147,16 +150,16 @@ def process_video(file, opt: Options):
         # Let the tracker know of new detections
         detections = np.array([[*f["box"], 0.95] for f in faces]).reshape((-1, 5))
         detection_ids = multi_tracker.update(detections, frame=f)
-        # Make each face keep a reference to its tracker
+        # Assign the tracker's detection ids to each face.
         for i, face in enumerate(faces):
             face["detection_id"] = detection_ids[i]
 
         # Clean up expired trajectories (-> save to file)
-        expired_tracks = multi_tracker.pop_expired(expiry_age=2 * opt.min_trajectory)
+        expired_tracks = multi_tracker.pop_expired(2 * opt.min_trajectory, f)
         saved_traj_count += save_trajectories(trajectories_file, expired_tracks, video_w, video_h)
 
-        # Extract good face boxes from middle frame, save those
-        if len(buf) == opt.min_trajectory:
+        # For some frames, we save images + features
+        if len(buf) == opt.min_trajectory and f < end:
             frame_data = buf.pop(0)
             if frame_data["index"] % opt.save_every == 0:
                 n_saved_faces = process_frame(

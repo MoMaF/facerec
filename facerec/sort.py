@@ -15,6 +15,8 @@ from __future__ import print_function
 
 import sys
 import os
+from typing import Optional
+
 import numpy as np
 from filterpy.kalman import KalmanFilter
 from scipy.optimize import linear_sum_assignment
@@ -26,7 +28,7 @@ def linear_assignment(utility_matrix):
     Returns: 2D matrix where the rows are the selected assignment indices (x, y).
     """
     x, y = linear_sum_assignment(utility_matrix, maximize=True)
-    return np.array(list(zip(x, y)))
+    return np.array(list(zip(x, y))).astype(np.int32)
 
 
 def iou_batch(bb_test, bb_gt):
@@ -157,6 +159,9 @@ class KalmanBoxTracker:
         """
         return convert_x_to_bbox(self.kf.x)
 
+    def __len__(self):
+        return len(self.history)
+
 
 def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
     """
@@ -174,14 +179,12 @@ def associate_detections_to_trackers(detections, trackers, iou_threshold=0.3):
 
     # Assign optimal detection + tracker pairs
     iou_matrix = iou_batch(detections, trackers)
-    if min(iou_matrix.shape) > 0:
-        matched_indices = linear_assignment(iou_matrix)
-    else:
-        matched_indices = np.empty(shape=(0, 2))
+    iou_matrix[iou_matrix < iou_threshold] = -1.0
+    matched_indices = linear_assignment(iou_matrix)
 
     # Filter matches to only contain those that pass the threshold
     matches = [m for m in matched_indices if iou_matrix[m[0], m[1]] >= iou_threshold]
-    matches = np.array(matches).reshape((-1, 2))
+    matches = np.array(matches).astype(matched_indices.dtype).reshape((-1, 2))
 
     # The rest are marked as unmatched
     unmatched_detections = np.array(list(set(range(len(detections))) - set(matches[:, 0])))
@@ -249,6 +252,9 @@ class Sort(object):
         # Assign new globally unique indices to each detection
         detections_idx = self.detection_count + np.arange(len(detections))
         self.detection_count += len(detections)
+        # Remember the frame index of each detection
+        for detection_id in detections_idx:
+            self.frame_map[detection_id] = frame
 
         # Update matched trackers with assigned detections
         for det_index, trk_index in matched:
@@ -257,10 +263,12 @@ class Sort(object):
             self.tracker_id_map[trk.id].append(detections_idx[det_index])
             self.detection_id_map[detections_idx[det_index]] = trk
 
-        # Remove trackers that have "expired"
+        # Unfollow trackers that have "expired" (note: still exist in detection_id_map)
         for i in reversed(range(len(self.trackers))):
             trk = self.trackers[i]
-            if trk.time_since_update > self.max_age and len(trk.history) >= self.min_hits:
+            expired = trk.time_since_update > self.max_age and len(trk) >= self.min_hits
+            not_started = len(trk) <= self.min_hits and trk.initial_hits < len(trk)
+            if expired or not_started:
                 self.trackers.pop(i)
 
         # Create and initialise new trackers for unmatched detections
@@ -269,10 +277,6 @@ class Sort(object):
             self.trackers.append(trk)
             self.tracker_id_map[trk.id] = [detections_idx[det_index]]
             self.detection_id_map[detections_idx[det_index]] = trk
-
-        # Remember the frame index of each detection
-        for detection_id in detections_idx:
-            self.frame_map[detection_id] = frame
 
         # Return the new globally unique indices for each detection
         return detections_idx
@@ -298,35 +302,44 @@ class Sort(object):
         detection_frame = self.frame_map.get(detection_id)
         i = detection_frame - trk.first_frame
 
-        assert i >= 0 and i < len(trk.history), "Faulty frame index!"
+        assert i >= 0 and i < len(trk), "Faulty frame index!"
         bbox, _ = trk.history[i]
         return bbox
 
     def kill_trackers(self):
         """Trigger to kill all trackers at once.
         """
-        for trk in self.trackers:
-            trk.time_since_update = sys.maxsize
         self.trackers = []
 
-    def pop_expired(self, expiry_age: int):
+    def pop_expired(self, expiry_age: int, current_frame: Optional[int] = None):
         """Allow SORT to remove trackers stored internally.
 
         Args:
-            expiry_age: A tracker can be removed if it had no detections for this
+            expiry_age: (int) A tracker can be removed if it had no detections for this
                 many frames recently.
+            current_frame: Current frame (int), used to compute the age of the tracker.
+                Set to None to force expire of all trackers.
         """
+        if current_frame is None:
+            current_frame = sys.maxsize
+
         expired_trackers = []
         for trk_id in list(self.tracker_id_map.keys()):
             detection_ids = self.tracker_id_map[trk_id]
             trk = self.detection_id_map[detection_ids[0]]
-            if trk.time_since_update >= expiry_age:
+            trk_age = current_frame - (trk.first_frame + len(trk) - trk.time_since_update - 1)
+            assert trk_age >= 0, "Age less than zero?"
+            if trk_age >= expiry_age:
                 # Clean up internal structures
                 del self.tracker_id_map[trk_id]
                 for det_id in detection_ids:
                     del self.detection_id_map[det_id]
+                    del self.frame_map[det_id]
+
                 # Add valid trackers to the list we'll return
                 if trk.initial_hits >= self.min_hits:
+                    # Remove predicted stuff at the end that weren't observations
+                    trk.history = trk.history[:len(trk) - trk.time_since_update]
                     expired_trackers.append(trk)
 
         return expired_trackers
