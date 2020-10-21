@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw
 import utils.utils as utils
 from detector import MTCNNDetector, RetinaFaceDetector
 from sort import Sort
+from scene import SceneChangeDetector
 
 CROP_MARGIN = 0
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
@@ -106,18 +107,25 @@ def process_video(file, opt: Options):
     assert cap.set(cv2.CAP_PROP_POS_FRAMES, beg), \
         f"Couldn't set start frame to: {beg}"
 
-    # We'll write (face) images, features and trajectories to disk
+    # We'll write (face) images, features, trajectories and scene changes to disk
     label, _ = os.path.splitext(os.path.basename(file))
+    label = str(int(label.split("-")[0]))
     features_dir = f"{opt.out_path}/{label}-data/features"
     trajectories_dir = f"{opt.out_path}/{label}-data/trajectories"
+    scene_changes_dir = f"{opt.out_path}/{label}-data/scene_changes"
     images_dir = f"{opt.out_path}/{label}-data/images"
     os.makedirs(features_dir, exist_ok=True)
     os.makedirs(trajectories_dir, exist_ok=True)
+    os.makedirs(scene_changes_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
     features_path = f"{features_dir}/features_{label}_{beg}-{end}.jsonl"
     features_file = open(features_path, mode="w")
     trajectories_path = f"{trajectories_dir}/trajectories_{label}_{beg}-{end}.jsonl"
     trajectories_file = open(trajectories_path, mode="w")
+    scene_changes_path = f"{scene_changes_dir}/scene_changes_{label}_{beg}-{end}.json"
+
+    scene = SceneChangeDetector(grayscale=False, movie_id=label)
+    scene_changes = []
 
     print(f"Movie file: {os.path.basename(file)}")
     print(f"Total length: {(n_total_frames / fps / 3600):.1f}h ({fps} fps)")
@@ -139,6 +147,8 @@ def process_video(file, opt: Options):
             break
 
         frame_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        scene_change_happened = scene.update(np.array(frame_img))
+
         faces = detector.detect(frame_img)
         buf.append({
             "index": f,
@@ -146,6 +156,11 @@ def process_video(file, opt: Options):
             "faces": faces,
             "label": label + ":" + str(f).zfill(6),
         })
+
+        # Stop tracking previous trajectories (faces) if a scene change occurred
+        if scene_change_happened:
+            scene_changes.append(f)
+            multi_tracker.kill_trackers()
 
         # Let the tracker know of new detections
         detections = np.array([[*f["box"], 0.95] for f in faces]).reshape((-1, 5))
@@ -180,6 +195,11 @@ def process_video(file, opt: Options):
     expired_tracks = multi_tracker.pop_expired(expiry_age=0)
     saved_traj_count += save_trajectories(trajectories_file, expired_tracks, video_w, video_h)
 
+    # Save scene changes to file
+    with open(scene_changes_path, "w") as f:
+        scene_changes = [f for f in scene_changes if f >= beg and f < end]
+        json.dump({"frame_indices": scene_changes}, f, indent=None, separators=(",", ":"))
+
     features_file.close()
     trajectories_file.close()
     cap.release()
@@ -193,8 +213,8 @@ if __name__ == "__main__":
     parser.add_argument("--save-every", type=int, default=5)
     parser.add_argument("--iou-threshold", type=float, default=0.5)
     parser.add_argument("--out-path", type=str, default="./data")
-    parser.add_argument("--min-trajectory", type=int, default=5)
-    parser.add_argument("--max-trajectory-age", type=int, default=10)
+    parser.add_argument("--min-trajectory", type=int, default=3)
+    parser.add_argument("--max-trajectory-age", type=int, default=5)
     parser.add_argument("file")
     args = parser.parse_args()
 
@@ -221,7 +241,7 @@ if __name__ == "__main__":
             n_shards=args.n_shards,
             shard_i=args.shard_i,
             save_every=args.save_every,
-            out_path=args.out_path,
+            out_path=args.out_path.rstrip("/"),
             max_trajectory_age=args.max_trajectory_age,
             min_trajectory=args.min_trajectory,
         )
