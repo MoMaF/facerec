@@ -1,0 +1,231 @@
+"""Merge data produced in different shards of extraction.
+
+Namely:
+    1. Trajectories
+    2. Scene cuts
+
+Output: single merged files trajectories.jsonl and scene_changes.json
+"""
+from typing import Set
+import argparse
+import os
+import json
+
+def is_trajectory_valid(trajectory, images_map):
+    """Check that a trajectory has associated images.
+    """
+    # TODO: add min count instead?
+    for frame_index, bbs in enumerate(trajectory["bbs"], start=trajectory["start"]):
+        if frame_index in images_map and tuple(bbs) in images_map[frame_index]:
+            return True
+    return False
+
+def save_trajectories(file, trajectories, images_map):
+    """Save trajectories, and filter out trajectories that had no corresponding
+    images for any bounding boxes.
+    """
+    # Write out .jsonl
+    n_saved = 0
+    for trajectory in trajectories:
+        if is_trajectory_valid(trajectory, images_map):
+            json.dump(trajectory, file, indent=None, separators=(",", ":"))
+            file.write("\n")
+            n_saved += 1
+    n_removed = len(trajectories) - n_saved
+    return n_saved, n_removed
+
+def save_scene_changes(file_path, scene_cuts: Set[int]):
+    scene_cuts_list = sorted(scene_cuts)
+    with open(file_path, "w") as file:
+        obj = {"frame_indices": scene_cuts_list}
+        json.dump(obj, file, indent=None, separators=(",", ":"))
+        file.write("\n")
+
+def load_images_map(images_dir):
+    """From all face images, produce an easy lookup table.
+
+    Format: {frame_index1: set(bbs_tuple1, bbs_tuple2, etc...)}
+    """
+    _, _, files = next(os.walk(images_dir))
+
+    # facerec image file format: kept-<movie_id>:<frame_i>_x1_y1_x2_y2.jpeg
+    image_map = {}
+    for name in files:
+        if not name.startswith("kept-") or not name.endswith(".jpeg"):
+            continue
+        _, name = name[5:-5].split(":")
+        frame_i, x1, y1, x2, y2 = [int(p) for p in name.split("_")]
+        if frame_i not in image_map:
+            image_map[frame_i] = set()
+        image_map[frame_i].add((x1, y1, x2, y2))
+    return image_map
+
+def iou(boxA, boxB):
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+    interArea = abs(max((xB - xA, 0)) * max((yB - yA), 0))
+    boxAArea = abs((boxA[2] - boxA[0]) * (boxA[3] - boxA[1]))
+    boxBArea = abs((boxB[2] - boxB[0]) * (boxB[3] - boxB[1]))
+    return interArea / float(boxAArea + boxBArea - interArea)
+
+def load_trajectory(trajectory_file: str, scene_cuts: Set[int], iou_threshold: float):
+    """Load a single trajectory file (from 1 shard).
+
+    Note: also merges possible trajectories that weren't caught by the face trackers
+    earlier, while making sure that no trajectories pass scene_cuts.
+    """
+    with open(trajectory_file, "r") as f:
+        trajectories = sorted([json.loads(line) for line in f], key=lambda t: t["start"])
+
+    merged_trajectories = []
+    merged_indices = set()
+
+    # Loop to merge trajectories within the shard itself
+    for i, t1 in enumerate(trajectories):
+        end = t1["start"] + t1["len"]
+        best_iou = iou_threshold
+        best_j = None
+        for j, t2 in enumerate(trajectories[i + 1:], start=i + 1):
+            if t2["start"] != end or j in merged_indices or end in scene_cuts:
+                continue
+            iou_value = iou(t1["bbs"][-1], t2["bbs"][0])
+            if iou_value > best_iou:
+                best_iou = iou_value
+                best_j = j
+        if best_j is not None:
+            t1["bbs"] = t1["bbs"] + trajectories[best_j]["bbs"]
+            t1["detected"] = t1["detected"] + trajectories[best_j]["detected"]
+            t1["len"] = len(t1["bbs"])
+            merged_indices.add(best_j)
+        merged_trajectories.append(t1)
+
+    # Return final trajectories + number of merges made
+    n_merges = len(trajectories) - len(merged_trajectories)
+    return merged_trajectories, n_merges
+
+def merge(data_dir: str, movie_id: int, iou_threshold: float, overlap: int):
+    """Merge trajectories that cross file boundaries in terms of frames.
+    """
+    trajectories_dir = os.path.join(data_dir, "trajectories")
+    scene_changes_dir = os.path.join(data_dir, "scene_changes")
+    images_dir = os.path.join(data_dir, "images")
+    assert os.path.exists(trajectories_dir), f"Didn't find: {trajectories_dir}"
+    assert os.path.exists(scene_changes_dir), f"Didn't find: {scene_changes_dir}"
+    assert os.path.exists(scene_changes_dir), f"Didn't find: {images_dir}"
+
+    # Check what trajectory files we have (one for each shard)
+    _, _, filenames = next(os.walk(trajectories_dir))
+    traj_files = []
+    for file in filenames:
+        # file is like: trajectories_987654_1000-2000.jsonl
+        name, ext = os.path.splitext(file)
+        parts = name.split("_")
+        if parts[0] != "trajectories":
+            continue
+        start, end = [int(f) for f in parts[2].split("-")]
+        traj_files.append({"s": start, "e": end, "path": os.path.join(trajectories_dir, file)})
+    traj_files = sorted(traj_files, key=lambda d: d["s"])
+
+    # Check that we have corresponding scene cut files (one for each shard)
+    scene_cuts = set()
+    for t_file in traj_files:
+        start, end = t_file["s"], t_file["e"]
+        # Scene change files have the same format as trajectory files
+        filename = f"scene_changes_{movie_id}_{start}-{end}.json"
+        scene_change_file = os.path.join(scene_changes_dir, filename)
+        assert os.path.exists(scene_change_file)
+        with open(scene_change_file, "r") as f:
+            shard_scene_cuts = json.load(f)["frame_indices"]
+            scene_cuts |= set(shard_scene_cuts)
+
+    print(f"Processing {len(traj_files)} trajectory files.")
+    print(f"Read a total {len(scene_cuts)} scene changes.")
+
+    # Load image lookup map that allows to check if a frame + bbs combo has an image
+    image_map = load_images_map(images_dir)
+
+    out_file = open(os.path.join(data_dir, "trajectories.jsonl"), "w")
+    trajectories = []
+
+    n_read = 0
+    n_saved = 0
+    n_merges = 0
+    n_deleted = 0
+
+    # Loop to merge trajectories across different shards
+    for file in traj_files:
+        new_trajectories, n_shard_merges = load_trajectory(file["path"], scene_cuts, iou_threshold)
+        n_read += len(new_trajectories)
+        n_merges += n_shard_merges
+
+        mergables = [t for t in new_trajectories if t["start"] < file["s"] + overlap]
+        others = [t for t in new_trajectories if t["start"] >= file["s"] + overlap]
+
+        expired = [t for t in trajectories if (t["start"] + t["len"]) < file["s"]]
+        trajectories = [t for t in trajectories if (t["start"] + t["len"]) >= file["s"]]
+
+        # Save trajectories that can't be merged anymore, to disk
+        ns, nr = save_trajectories(out_file, expired, image_map)
+        n_saved += ns
+        n_deleted += nr
+
+        # Check if some of the new trajectories can merge into an old one
+        for t1 in mergables:
+            best_iou = iou_threshold
+            best_t = None
+
+            # We'll only attempt a merge if t1["start"] isn't at a scene cut
+            if t1["start"] not in scene_cuts:
+                for t2 in trajectories:
+                    if (t2["start"] + t2["len"]) <= t1["start"]:
+                        continue
+                    t2_bbs_i = t1["start"] - t2["start"]
+                    assert t2_bbs_i >= 0, "Invalid start index?"
+                    iou_value = iou(t2["bbs"][t2_bbs_i], t1["bbs"][0])
+                    if iou_value > best_iou:
+                        best_iou = iou_value
+                        best_t = t2
+
+            # A merge was found!
+            if best_t is not None:
+                n_merges += 1
+                assumed_len = t1["start"] + t1["len"] - best_t["start"]
+                best_t["bbs"] = best_t["bbs"][:(t1["start"] - best_t["start"])] + t1["bbs"]
+                best_t["detected"] = best_t["detected"][:(t1["start"] - best_t["start"])] + t1["detected"]
+                best_t["len"] = len(best_t["bbs"])
+                assert best_t["len"] == assumed_len, "Len???"
+            else:
+                trajectories.append(t1)
+
+        trajectories += others
+
+    # Save remaining
+    ns, nr = save_trajectories(out_file, trajectories, image_map)
+    n_saved += ns
+    n_deleted += nr
+    out_file.close()
+
+    # Save merged scene cuts
+    scene_cuts_file = os.path.join(data_dir, "scene_changes.json")
+    save_scene_changes(scene_cuts_file, scene_cuts)
+
+    print(f"Done! Read {n_read} trajectories and saved {n_saved}.")
+    print(f"Total merges: {n_merges}. Total removed since they had no images: {n_deleted}.")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(allow_abbrev=True)
+    parser.add_argument("--iou-threshold", type=float, default=0.5,
+                        help="IOU threshold when merging bounding boxes.")
+    parser.add_argument("--overlap", type=int, default=5,
+                        help="""Overlap to consider when merging across shards. Should
+                        match the max-trajectory-age that was used when extracting.""")
+    parser.add_argument("--path", type=str, default=".")
+    args = parser.parse_args()
+
+    # Extract movie id from data directory, like ./123456-data
+    data_dir = args.path
+    movie_id: int = int(os.path.basename(data_dir).split("-")[0])
+
+    merge(data_dir, movie_id, args.iou_threshold, args.overlap)
