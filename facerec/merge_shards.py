@@ -110,10 +110,12 @@ def merge(data_dir: str, movie_id: int, iou_threshold: float, overlap: int):
     """
     trajectories_dir = os.path.join(data_dir, "trajectories")
     scene_changes_dir = os.path.join(data_dir, "scene_changes")
+    features_dir = os.path.join(data_dir, "features")
     images_dir = os.path.join(data_dir, "images")
     assert os.path.exists(trajectories_dir), f"Didn't find: {trajectories_dir}"
     assert os.path.exists(scene_changes_dir), f"Didn't find: {scene_changes_dir}"
-    assert os.path.exists(scene_changes_dir), f"Didn't find: {images_dir}"
+    assert os.path.exists(features_dir), f"Didn't find: {features_dir}"
+    assert os.path.exists(images_dir), f"Didn't find: {images_dir}"
 
     # Check what trajectory files we have (one for each shard)
     _, _, filenames = next(os.walk(trajectories_dir))
@@ -135,10 +137,28 @@ def merge(data_dir: str, movie_id: int, iou_threshold: float, overlap: int):
         # Scene change files have the same format as trajectory files
         filename = f"scene_changes_{movie_id}_{start}-{end}.json"
         scene_change_file = os.path.join(scene_changes_dir, filename)
-        assert os.path.exists(scene_change_file)
-        with open(scene_change_file, "r") as f:
-            shard_scene_cuts = json.load(f)["frame_indices"]
-            scene_cuts |= set(shard_scene_cuts)
+        if os.path.exists(scene_change_file):
+            with open(scene_change_file, "r") as f:
+                shard_scene_cuts = json.load(f)["frame_indices"]
+                scene_cuts |= set(shard_scene_cuts)
+
+    # Merge feature files into one
+    _, _, filenames = next(os.walk(features_dir))
+    feature_files = []
+    for file in filenames:
+        # file is like: features_987654_1000-2000.jsonl
+        name, ext = os.path.splitext(file)
+        parts = name.split("_")
+        if parts[0] != "features":
+            continue
+        start, _ = [int(f) for f in parts[2].split("-")]
+        feature_files.append({"s": start, "path": os.path.join(features_dir, file)})
+    feature_files = sorted(feature_files, key=lambda f: f["s"])
+
+    with open(os.path.join(data_dir, "features.jsonl"), "w") as write_file:
+        for file_obj in feature_files:
+            with open(file_obj["path"], "r") as read_file:
+                write_file.write(read_file.read())
 
     print(f"Processing {len(traj_files)} trajectory files.")
     print(f"Read a total {len(scene_cuts)} scene changes.")
@@ -179,10 +199,10 @@ def merge(data_dir: str, movie_id: int, iou_threshold: float, overlap: int):
             # We'll only attempt a merge if t1["start"] isn't at a scene cut
             if t1["start"] not in scene_cuts:
                 for t2 in trajectories:
-                    if (t2["start"] + t2["len"]) <= t1["start"]:
+                    if t2["start"] >= t1["start"] or (t2["start"] + t2["len"]) <= t1["start"]:
                         continue
                     t2_bbs_i = t1["start"] - t2["start"]
-                    assert t2_bbs_i >= 0, "Invalid start index?"
+                    assert t2_bbs_i >= 0, "Invalid index?"
                     iou_value = iou(t2["bbs"][t2_bbs_i], t1["bbs"][0])
                     if iou_value > best_iou:
                         best_iou = iou_value
@@ -197,7 +217,7 @@ def merge(data_dir: str, movie_id: int, iou_threshold: float, overlap: int):
                 best_t["len"] = len(best_t["bbs"])
                 assert best_t["len"] == assumed_len, "Len???"
             else:
-                trajectories.append(t1)
+                others.append(t1)
 
         trajectories += others
 
@@ -225,7 +245,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Extract movie id from data directory, like ./123456-data
-    data_dir = args.path
+    data_dir = args.path.rstrip("/")
     movie_id: int = int(os.path.basename(data_dir).split("-")[0])
 
     merge(data_dir, movie_id, args.iou_threshold, args.overlap)
