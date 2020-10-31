@@ -15,7 +15,6 @@ from detector import MTCNNDetector, RetinaFaceDetector
 from sort import Sort
 from scene import SceneChangeDetector
 
-CROP_MARGIN = 0
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
 
 Options = namedtuple(
@@ -212,9 +211,10 @@ if __name__ == "__main__":
     parser.add_argument("--shard-i", type=int, required=True)
     parser.add_argument("--save-every", type=int, default=5)
     parser.add_argument("--iou-threshold", type=float, default=0.5)
-    parser.add_argument("--out-path", type=str, default="./data")
     parser.add_argument("--min-trajectory", type=int, default=3)
     parser.add_argument("--max-trajectory-age", type=int, default=5)
+    parser.add_argument("--min-face-size", type=int, default=50)
+    parser.add_argument("--out-path", type=str, default="./data")
     parser.add_argument("file")
     args = parser.parse_args()
 
@@ -226,7 +226,7 @@ if __name__ == "__main__":
 
     # Comment out 1, same wrapped api!
     # detector = MTCNNDetector()
-    detector = RetinaFaceDetector()
+    detector = RetinaFaceDetector(min_face_size=args.min_face_size)
 
     # Tracker - SORT. Has nothing to do with sorting
     multi_tracker = Sort(

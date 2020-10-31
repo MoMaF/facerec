@@ -32,7 +32,14 @@ class MTCNNDetector:
         return bbs
 
 class RetinaFaceDetector:
-    def __init__(self):
+    def __init__(self, min_face_size=0):
+        """Face detector based on RetinaFace.
+
+        Args:
+            min_face_size (int): minimum size of a face to be considered a match.
+                Compared against min(width, height) of the face bounding box.
+        """
+        self.min_size = min_face_size
         self.model = RetinaFace(quality="normal")
 
     def detect(self, img: np.array):
@@ -48,4 +55,4 @@ class RetinaFaceDetector:
                 "mouth_left": (int(b["left_lip"][0]), int(b["left_lip"][1])),
                 "mouth_right": (int(b["right_lip"][0]), int(b["right_lip"][1])),
             }
-        } for b in bbs]
+        } for b in bbs if min(b["x2"] - b["x1"], b["y2"] - b["y1"]) >= self.min_size]
