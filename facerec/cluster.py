@@ -7,30 +7,7 @@ import scipy.cluster as cluster
 import matplotlib.pyplot as plt
 import numpy as np
 
-
-def read_features(data_dir: str):
-    features_file = os.path.join(data_dir, "features.jsonl")
-    vector_map = {}
-    with open(features_file, "r") as file:
-        for line in file:
-            obj = json.loads(line)
-            frame, box = obj["frame"], tuple(obj["box"])
-            vector = np.array(obj["embedding"], dtype=np.float32)
-            if frame not in vector_map:
-                vector_map[frame] = {}
-            vector_map[frame][box] = vector
-    # Map frame_index, box -> vector
-    return vector_map
-
-def get_vectors(trajectory, vector_map):
-    """Read out all existing embedding vectors from a trajectory.
-    """
-    vectors = []
-    for frame, bbs in enumerate(trajectory["bbs"], start=trajectory["start"]):
-        tup_bbs = tuple(bbs)
-        if frame in vector_map and tup_bbs in vector_map[frame]:
-            vectors.append(vector_map[frame][tup_bbs])
-    return np.array(vectors)
+from utils.utils import read_features, get_vectors
 
 def read_trajectories(data_dir: str, vector_map):
     trajectories_file = os.path.join(data_dir, "trajectories.jsonl")
