@@ -10,6 +10,7 @@ from typing import Set
 import argparse
 import os
 import json
+from utils.utils import load_images_map
 
 def is_trajectory_valid(trajectory, images_map):
     """Check that a trajectory has associated images.
@@ -41,25 +42,6 @@ def save_scene_changes(file_path, scene_cuts: Set[int]):
         json.dump(obj, file, indent=None, separators=(",", ":"))
         file.write("\n")
 
-def load_images_map(images_dir):
-    """From all face images, produce an easy lookup table.
-
-    Format: {frame_index1: set(bbs_tuple1, bbs_tuple2, etc...)}
-    """
-    _, _, files = next(os.walk(images_dir))
-
-    # facerec image file format: kept-<movie_id>:<frame_i>_x1_y1_x2_y2.jpeg
-    image_map = {}
-    for name in files:
-        if not name.startswith("kept-") or not name.endswith(".jpeg"):
-            continue
-        _, name = name[5:-5].split(":")
-        frame_i, x1, y1, x2, y2 = [int(p) for p in name.split("_")]
-        if frame_i not in image_map:
-            image_map[frame_i] = set()
-        image_map[frame_i].add((x1, y1, x2, y2))
-    return image_map
-
 def iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
@@ -84,21 +66,27 @@ def load_trajectory(trajectory_file: str, scene_cuts: Set[int], iou_threshold: f
 
     # Loop to merge trajectories within the shard itself
     for i, t1 in enumerate(trajectories):
-        end = t1["start"] + t1["len"]
-        best_iou = iou_threshold
-        best_j = None
-        for j, t2 in enumerate(trajectories[i + 1:], start=i + 1):
-            if t2["start"] != end or j in merged_indices or end in scene_cuts:
-                continue
-            iou_value = iou(t1["bbs"][-1], t2["bbs"][0])
-            if iou_value > best_iou:
-                best_iou = iou_value
-                best_j = j
-        if best_j is not None:
-            t1["bbs"] = t1["bbs"] + trajectories[best_j]["bbs"]
-            t1["detected"] = t1["detected"] + trajectories[best_j]["detected"]
-            t1["len"] = len(t1["bbs"])
-            merged_indices.add(best_j)
+        if i in merged_indices:
+            continue
+        found_merge = True
+        while found_merge:
+            end = t1["start"] + t1["len"]
+            best_iou = iou_threshold
+            best_j = None
+            found_merge = False
+            for j, t2 in enumerate(trajectories[i + 1:], start=i + 1):
+                if t2["start"] != end or j in merged_indices or end in scene_cuts:
+                    continue
+                iou_value = iou(t1["bbs"][-1], t2["bbs"][0])
+                if iou_value > best_iou:
+                    best_iou = iou_value
+                    best_j = j
+            if best_j is not None:
+                found_merge = True
+                t1["bbs"] = t1["bbs"] + trajectories[best_j]["bbs"]
+                t1["detected"] = t1["detected"] + trajectories[best_j]["detected"]
+                t1["len"] = len(t1["bbs"])
+                merged_indices.add(best_j)
         merged_trajectories.append(t1)
 
     # Return final trajectories + number of merges made
