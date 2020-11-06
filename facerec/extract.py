@@ -213,7 +213,7 @@ if __name__ == "__main__":
     parser.add_argument("--iou-threshold", type=float, default=0.5)
     parser.add_argument("--min-trajectory", type=int, default=3)
     parser.add_argument("--max-trajectory-age", type=int, default=5)
-    parser.add_argument("--min-face-size", type=int, default=50)
+    parser.add_argument("--min-face-size", type=int, default=0)
     parser.add_argument("--out-path", type=str, default="./data")
     parser.add_argument("file")
     args = parser.parse_args()
