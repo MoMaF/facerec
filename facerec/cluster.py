@@ -1,6 +1,7 @@
 import os
 import json
 import argparse
+import glob
 from typing import List, Set
 
 import scipy.cluster as cluster
@@ -78,7 +79,7 @@ def relabel(clusters):
         new_clusters[np.where(ci == clusters)[0]] = i
     return new_clusters
 
-def cluster_trajectories(trajectories, embeddings, size=30, min_size=20, max_size=40):
+def cluster_trajectories(trajectories, embeddings, size, min_size, max_size):
     """Perform clustering, while keeping a max cluster size for ease of use
     when labeling later on.
 
@@ -131,22 +132,27 @@ def write_clusters(clusters: np.array, data_dir: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(allow_abbrev=True)
-    parser.add_argument("--size", type=int, default=30,
+    parser.add_argument("--size", type=int, default=18,
                         help="Preferred size of output clusters (in trajectory count).")
-    parser.add_argument("--min-size", type=int, default=20,
+    parser.add_argument("--min-size", type=int, default=12,
                         help="Preferred minimum size of output clusters.")
-    parser.add_argument("--max-size", type=int, default=40,
+    parser.add_argument("--max-size", type=int, default=24,
                         help="Maximum size of output clusters.")
     parser.add_argument("--path", type=str, default=".")
     args = parser.parse_args()
 
-    # data_dir will be a movie directory like ./data/123456-data
-    data_dir = args.path.rstrip("/")
-    vector_map = read_features(data_dir)
-    trajectories, mean_embeddings = read_trajectories(data_dir, vector_map)
+    data_dirs = glob.glob(args.path)
+    for data_dir in data_dirs:
+        # data_dir will be a movie directory like ./data/123456-data
+        data_dir = data_dir.rstrip("/")
+        print(f"Clustering: {data_dir}")
 
-    clusters = cluster_trajectories(
-        trajectories, mean_embeddings, args.size, args.min_size, args.max_size
-    )
+        vector_map = read_features(data_dir)
+        trajectories, mean_embeddings = read_trajectories(data_dir, vector_map)
 
-    write_clusters(clusters, data_dir)
+        clusters = cluster_trajectories(
+            trajectories, mean_embeddings, args.size, args.min_size, args.max_size
+        )
+
+        write_clusters(clusters, data_dir)
+        print()
