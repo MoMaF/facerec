@@ -123,7 +123,7 @@ def process_video(file, opt: Options):
     trajectories_file = open(trajectories_path, mode="w")
     scene_changes_path = f"{scene_changes_dir}/scene_changes_{label}_{beg}-{end}.json"
 
-    scene = SceneChangeDetector(grayscale=False, movie_id=label)
+    scene = SceneChangeDetector(grayscale=False, crop=True, movie_id=label)
     scene_changes = []
 
     print(f"Movie file: {os.path.basename(file)}")
