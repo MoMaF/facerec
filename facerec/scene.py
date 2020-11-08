@@ -11,9 +11,20 @@ class SceneChangeDetector:
 
     Based on the paper: Fast Pixel-Based Video Scene Change Detection.
     """
-    def __init__(self, grayscale: bool, movie_id: str):
+    def __init__(self, grayscale: bool, crop: bool, movie_id: str):
+        """
+        Args:
+            grayscale: Consider the images to be grayscale, and perform a luminosity
+                conversion before analysis.
+            crop: Crop into a center 2:1 aspect ratio before performing analysis.
+                Helps in dealing with videos with vertical black bars in some digital
+                copies of modern films.
+            movie_id: Stringified movie_id, only used if scene changes are written
+                to file separately by this module. Mostly not needed.
+        """
         self.frame_counter = 0
         self.grayscale = grayscale
+        self.crop = crop
         self.movie_id = movie_id
 
         # Values from previous iterations
@@ -27,12 +38,6 @@ class SceneChangeDetector:
         self.mafd_eq = [0]
         self.sdmafd_eq = [0, 0]
         self.adfv_eq = [0, 0]
-
-    def normalize(self, img: np.array):
-        # To gray
-        img = img.mean(-1)
-        # Standardize
-        return img #/ (img.mean() + 0.1)
 
     def luminance(self, img: np.array):
         """Convert RGB to Y (luminance).
@@ -93,6 +98,12 @@ class SceneChangeDetector:
             img = img[..., 0].astype(np.float32)
         else:
             img = self.luminance(img)
+
+        # Crop into center 2:1 rectangle (helps dealing with black bars)
+        h, w = img.shape[:2]
+        if self.crop and w / h < 2 / 1:
+            inset_h = int((h - (1 / 2 * w)) / 2)
+            img = img[inset_h:-inset_h,:]
 
         # Histogram equalized image
         img_eq = self.histogram_equalization(img)
