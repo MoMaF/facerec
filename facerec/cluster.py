@@ -116,6 +116,11 @@ def cluster_trajectories(trajectories, embeddings, size, min_size, max_size):
     cluster_ids, counts = np.unique(clusters, return_counts=True)
     print(f"Number of clusters: {len(cluster_ids)}")
 
+    # Finally, relabel clusters with those with most trajectories first
+    # So cluster 0 is the one with most trajectories in it, etc.
+    order = np.argsort(np.argsort(-counts))[cluster_ids]
+    clusters = order[clusters]
+
     return clusters
 
 def write_clusters(clusters: np.array, data_dir: str):
