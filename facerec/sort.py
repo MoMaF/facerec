@@ -71,7 +71,7 @@ def convert_x_to_bbox(x):
     Takes a bounding box in the centre form [x,y,s,r] and returns it in the form
       [x1,y1,x2,y2] where x1,y1 is the top left and x2,y2 is the bottom right
     """
-    assert x.shape == (7, 1)  # Shape of kf internal state
+    assert x.shape == (8, 1)  # Shape of kf internal state
     x = x[:,0]
     w = np.sqrt(x[2] * x[3])
     h = x[2] / w
@@ -90,22 +90,24 @@ class KalmanBoxTracker:
         """
         self.first_frame = first_frame
 
-        # define constant velocity model
-        self.kf = KalmanFilter(dim_x=7, dim_z=4)
+        # Init Kalman filter. State shape is:
+        # x = [x_center, y_center, scale, ratio, *derivatives-of-those-4...]
+        self.kf = KalmanFilter(dim_x=8, dim_z=4)
         self.kf.F = np.array([
-            [1, 0, 0, 0, 1, 0, 0],
-            [0, 1, 0, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0, 0, 1],
-            [0, 0, 0, 1, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0],
-            [0, 0, 0, 0, 0, 1, 0],
-            [0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1, 0, 0, 0],
+            [0, 1, 0, 0, 0, 1, 0, 0],
+            [0, 0, 1, 0, 0, 0, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0, 1],
+            [0, 0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0, 1],
         ])
         self.kf.H = np.array([
-            [1, 0, 0, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 1, 0, 0, 0, 0],
-            [0, 0, 0, 1, 0, 0, 0],
+            [1, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0, 0],
         ])
 
         self.kf.R[2:, 2:] *= 10.0
@@ -142,8 +144,11 @@ class KalmanBoxTracker:
 
         Note: always call predict before an update.
         """
-        if (self.kf.x[6] + self.kf.x[2]) <= 0:
+        # Area (x[6]) and ratio (x[7]) can't be below zero. Forcing positive.
+        if (self.kf.x[6] + self.kf.x[2]) < 1e-3:
             self.kf.x[6] *= 0.0
+        if (self.kf.x[7] + self.kf.x[3]) < 1e-3:
+            self.kf.x[7] *= 0.0
 
         self.time_since_update += 1
 
@@ -242,6 +247,7 @@ class Sort(object):
         trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
         for t in reversed(to_del):
             print("WARNING: Removed tracker with NaN predictions.")
+            self.trackers[t].had_nan_preds = True
             self.trackers.pop(t)
 
         assert detections.shape[1] == 5
@@ -274,6 +280,7 @@ class Sort(object):
         # Create and initialise new trackers for unmatched detections
         for det_index in unmatched_dets:
             trk = KalmanBoxTracker(detections[det_index], frame)
+            trk.had_nan_preds = False
             self.trackers.append(trk)
             self.tracker_id_map[trk.id] = [detections_idx[det_index]]
             self.detection_id_map[detections_idx[det_index]] = trk
@@ -291,7 +298,7 @@ class Sort(object):
         assert trk is not None, "Tried to access non-existent tracker!"
 
         # TODO: more criteria?
-        start_ok = trk.initial_hits >= self.min_hits
+        start_ok = trk.initial_hits >= self.min_hits and not trk.had_nan_preds
         return start_ok
 
     def get_detection_bbox(self, detection_id):
