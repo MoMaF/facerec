@@ -11,7 +11,7 @@ class SceneChangeDetector:
 
     Based on the paper: Fast Pixel-Based Video Scene Change Detection.
     """
-    def __init__(self, grayscale: bool, crop: bool, movie_id: str):
+    def __init__(self, grayscale: bool, crop: bool, movie_id: int):
         """
         Args:
             grayscale: Consider the images to be grayscale, and perform a luminosity
@@ -19,7 +19,7 @@ class SceneChangeDetector:
             crop: Crop into a center 2:1 aspect ratio before performing analysis.
                 Helps in dealing with videos with vertical black bars in some digital
                 copies of modern films.
-            movie_id: Stringified movie_id, only used if scene changes are written
+            movie_id: (int) movie_id, only used if scene changes are written
                 to file separately by this module. Mostly not needed.
         """
         self.frame_counter = 0

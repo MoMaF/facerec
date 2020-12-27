@@ -8,7 +8,7 @@ from time import time
 import cv2
 import numpy as np
 import tensorflow
-from PIL import Image, ImageDraw
+from PIL import Image, ImageOps
 
 import utils.utils as utils
 from detector import MTCNNDetector, RetinaFaceDetector
@@ -16,16 +16,28 @@ from sort import Sort
 from scene import SceneChangeDetector
 
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
+SAVE_FACE_PADDING = 0.10  # before saving to disk, add this padding to show more face
 
 Options = namedtuple(
     "Options",
     ["out_path", "n_shards", "shard_i", "save_every", "min_trajectory", "max_trajectory_age"],
 )
 
-def bbox_float_to_int(bbox_float, max_w, max_h):
-    bbox_float = np.maximum(np.round(bbox_float), 0)
-    bbox_float[2] = np.minimum(bbox_float[2], max_w)
-    bbox_float[3] = np.minimum(bbox_float[3], max_h)
+def bbox_float_to_int(bbox_float, max_w, max_h, padding=0.0):
+    """Convert float bounding box to integers.
+    """
+    bbox_float = np.array(bbox_float, dtype=np.float32)
+
+    # Optionally pad to show more of the face
+    dim = np.minimum(bbox_float[2] - bbox_float[0], bbox_float[3] - bbox_float[1])
+    pad_px = padding * dim
+    bbox_float += np.array([-pad_px, -pad_px, pad_px, pad_px])
+
+    # Make sure box doesn't extend beyond image borders
+    bbox_float = np.maximum(bbox_float, [0, 0, 0, 0])
+    bbox_float = np.minimum(bbox_float, [max_w, max_h, max_w, max_h])
+    bbox_float = np.round(bbox_float)
+
     return [int(c) for c in bbox_float]
 
 def save_trajectories(file, trackers, video_w, video_h):
@@ -62,27 +74,39 @@ def process_frame(frame_data, video_w, video_h, features_file, images_dir, min_t
 
     img = Image.fromarray(frame_data["img_np"])
     for face in valid_faces:
-        # Retrieve the bbox filtered by the Kalman filter, instead of actual detection
+        # Retrieve the posterior bbox filtered by the Kalman filter
         filtered_box = multi_tracker.get_detection_bbox(face["detection_id"])
-        filtered_box = bbox_float_to_int(filtered_box, video_w, video_h)
 
-        # Crop onto face only
-        cropped = img.crop(tuple(filtered_box))
+        # Crop onto face only (tight crop for embedding)
+        tight_box = bbox_float_to_int(filtered_box, video_w, video_h)
+        cropped = img.crop(tuple(tight_box))
         resized = cropped.resize((FACE_IMAGE_SIZE, FACE_IMAGE_SIZE), resample=Image.BILINEAR)
-
         # Get face embedding vector via facenet model
         scaledx = np.array(resized)
         scaledx = scaledx.reshape(-1, FACE_IMAGE_SIZE, FACE_IMAGE_SIZE, 3)
         embedding = utils.get_embedding(facenet, scaledx[0])
 
+        # Produce padded crop that will be saved to disk (shown during annotation)
+        padded_box = bbox_float_to_int(filtered_box, video_w, video_h, padding=SAVE_FACE_PADDING)
+        padded_img = img.crop(tuple(padded_box))
+        padded_img.thumbnail((FACE_IMAGE_SIZE, FACE_IMAGE_SIZE), resample=Image.BILINEAR)
+
+        # Determine if cropped image is actually grayscale. If so, convert.
+        padded_a = np.array(padded_img).reshape((-1, 3))
+        is_gray = np.all(padded_a[:,0] == padded_a[:,1])
+        if is_gray:
+            padded_img = ImageOps.grayscale(padded_img)
+
         # Save face image and features
-        box_label = frame_data["label"] + "_{}_{}_{}_{}".format(*filtered_box)
-        resized.save(f"{images_dir}/kept-{box_label}.jpeg")
+        # Note: the box is named after the tight crop, even though the saved image
+        # uses the padded box
+        box_tag = frame_data["tag"] + ":{}_{}_{}_{}".format(*tight_box)
+        padded_img.save(f"{images_dir}/{box_tag}.jpeg", quality=65)
         json.dump({
             "frame": frame_data["index"],
-            "label": box_label,
+            "tag": box_tag,
             "embedding": embedding.tolist(),
-            "box": filtered_box,
+            "box": tight_box,
             "keypoints": face["keypoints"],
         }, features_file, indent=None, separators=(",", ":"))
         features_file.write("\n")
@@ -107,23 +131,23 @@ def process_video(file, opt: Options):
         f"Couldn't set start frame to: {beg}"
 
     # We'll write (face) images, features, trajectories and scene changes to disk
-    label, _ = os.path.splitext(os.path.basename(file))
-    label = str(int(label.split("-")[0]))
-    features_dir = f"{opt.out_path}/{label}-data/features"
-    trajectories_dir = f"{opt.out_path}/{label}-data/trajectories"
-    scene_changes_dir = f"{opt.out_path}/{label}-data/scene_changes"
-    images_dir = f"{opt.out_path}/{label}-data/images"
+    basename_no_ext, _ = os.path.splitext(os.path.basename(file))
+    movie_id = int(basename_no_ext.split("-")[0])
+    features_dir = f"{opt.out_path}/{movie_id}-data/features"
+    trajectories_dir = f"{opt.out_path}/{movie_id}-data/trajectories"
+    scene_changes_dir = f"{opt.out_path}/{movie_id}-data/scene_changes"
+    images_dir = f"{opt.out_path}/{movie_id}-data/images"
     os.makedirs(features_dir, exist_ok=True)
     os.makedirs(trajectories_dir, exist_ok=True)
     os.makedirs(scene_changes_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
-    features_path = f"{features_dir}/features_{label}_{beg}-{end}.jsonl"
+    features_path = f"{features_dir}/features_{movie_id}_{beg}-{end}.jsonl"
     features_file = open(features_path, mode="w")
-    trajectories_path = f"{trajectories_dir}/trajectories_{label}_{beg}-{end}.jsonl"
+    trajectories_path = f"{trajectories_dir}/trajectories_{movie_id}_{beg}-{end}.jsonl"
     trajectories_file = open(trajectories_path, mode="w")
-    scene_changes_path = f"{scene_changes_dir}/scene_changes_{label}_{beg}-{end}.json"
+    scene_changes_path = f"{scene_changes_dir}/scene_changes_{movie_id}_{beg}-{end}.json"
 
-    scene = SceneChangeDetector(grayscale=False, crop=True, movie_id=label)
+    scene = SceneChangeDetector(grayscale=False, crop=True, movie_id=movie_id)
     scene_changes = []
 
     print(f"Movie file: {os.path.basename(file)}")
@@ -153,7 +177,7 @@ def process_video(file, opt: Options):
             "index": f,
             "img_np": frame_img,
             "faces": faces,
-            "label": label + ":" + str(f).zfill(6),
+            "tag": f"{movie_id}:{f}",
         })
 
         # Stop tracking previous trajectories (faces) if a scene change occurred
