@@ -26,16 +26,18 @@ def load_images_map(images_dir):
     """
     _, _, files = next(os.walk(images_dir))
 
-    # facerec image file format: kept-<movie_id>:<frame_i>_x1_y1_x2_y2.jpeg
+    # facerec image file format: <movie_id>:<frame_i>:x1_y1_x2_y2.jpeg
     image_map = {}
     for name in files:
-        if not name.startswith("kept-") or not name.endswith(".jpeg"):
+        name, ext = os.path.splitext(os.path.basename(name))
+        if ext != ".jpeg":
             continue
-        _, name = name[5:-5].split(":")
-        frame_i, x1, y1, x2, y2 = [int(p) for p in name.split("_")]
+        _, frame_str, box_str = name.split(":")
+        frame_i = int(frame_str)
+        bbox = tuple([int(p) for p in box_str.split("_")])
         if frame_i not in image_map:
             image_map[frame_i] = set()
-        image_map[frame_i].add((x1, y1, x2, y2))
+        image_map[frame_i].add(bbox)
     return image_map
 
 def read_features(data_dir: str):
