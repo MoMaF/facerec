@@ -34,7 +34,7 @@ def passes_min_size(trajectory, min_face_size):
             return False
     return True
 
-def save_trajectories(file, trajectories, images_map, min_face_size):
+def save_trajectories(file, trajectories, images_map, min_face_size, traj_count, movie_id):
     """Save trajectories, and filter out trajectories that had no corresponding
     images for any bounding boxes.
     """
@@ -42,16 +42,19 @@ def save_trajectories(file, trajectories, images_map, min_face_size):
     n_saved = 0
     for traj in trajectories:
         if is_trajectory_valid(traj, images_map) and passes_min_size(traj, min_face_size):
+            traj["index"] = traj_count
+            traj["movie_id"] = movie_id
             json.dump(traj, file, indent=None, separators=(",", ":"))
             file.write("\n")
+            traj_count += 1
             n_saved += 1
     n_removed = len(trajectories) - n_saved
     return n_saved, n_removed
 
-def save_scene_changes(file_path, scene_cuts: Set[int]):
+def save_scene_changes(file_path, scene_cuts: Set[int], movie_id: int):
     scene_cuts_list = sorted(scene_cuts)
     with open(file_path, "w") as file:
-        obj = {"frame_indices": scene_cuts_list}
+        obj = {"frame_indices": scene_cuts_list, "movie_id": movie_id}
         json.dump(obj, file, indent=None, separators=(",", ":"))
         file.write("\n")
 
@@ -189,7 +192,7 @@ def merge(
         trajectories = [t for t in trajectories if (t["start"] + t["len"]) >= file["s"]]
 
         # Save trajectories that can't be merged anymore, to disk
-        ns, nr = save_trajectories(out_file, expired, image_map, min_face_size)
+        ns, nr = save_trajectories(out_file, expired, image_map, min_face_size, n_saved, movie_id)
         n_saved += ns
         n_deleted += nr
 
@@ -224,14 +227,14 @@ def merge(
         trajectories += others
 
     # Save remaining
-    ns, nr = save_trajectories(out_file, trajectories, image_map, min_face_size)
+    ns, nr = save_trajectories(out_file, trajectories, image_map, min_face_size, n_saved, movie_id)
     n_saved += ns
     n_deleted += nr
     out_file.close()
 
     # Save merged scene cuts
     scene_cuts_file = os.path.join(data_dir, "scene_changes.json")
-    save_scene_changes(scene_cuts_file, scene_cuts)
+    save_scene_changes(scene_cuts_file, scene_cuts, movie_id)
 
     print(f"Total merges: {n_merges}.")
     print(f"Total removed if they had no images or had too small faces: {n_deleted}.")

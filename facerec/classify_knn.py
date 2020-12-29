@@ -89,6 +89,8 @@ def classify(data_dir, X, y, save_p_higher=0.05):
     """Classify actors in individual images in each trajectory and cluster, then
     aggregate to get trajectory and cluster-level predictions.
     """
+    movie_id = int(os.path.basename(data_dir).split("-")[0])
+
     trajectories_file = os.path.join(data_dir, "trajectories.jsonl")
     clusters_file = os.path.join(data_dir, "clusters.json")
     predictions_file = os.path.join(data_dir, "predictions.json")
@@ -144,7 +146,11 @@ def classify(data_dir, X, y, save_p_higher=0.05):
 
     # Save predictions to file
     with open(predictions_file, "w") as file:
-        json.dump(cluster_preds, file)
+        obj = {
+            "movie_id": movie_id,
+            "predictions": cluster_preds,
+        }
+        json.dump(obj, file)
 
     print(f"Wrote predictions: {predictions_file}")
 
