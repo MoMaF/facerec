@@ -123,11 +123,11 @@ def cluster_trajectories(trajectories, embeddings, size, min_size, max_size):
 
     return clusters
 
-def write_clusters(clusters: np.array, data_dir: str):
+def write_clusters(clusters: np.array, data_dir: str, movie_id: int):
     out_file = os.path.join(data_dir, "clusters.json")
     with open(out_file, "w") as file:
         json.dump(
-            {"clusters": [int(c) for c in clusters]},
+            {"clusters": [int(c) for c in clusters], "movie_id": movie_id},
             file, indent=None, separators=(",", ":")
         )
         file.write("\n")
@@ -150,6 +150,7 @@ if __name__ == "__main__":
     for data_dir in data_dirs:
         # data_dir will be a movie directory like ./data/123456-data
         data_dir = data_dir.rstrip("/")
+        movie_id = int(os.path.basename(data_dir).split("-")[0])
         print(f"Clustering: {data_dir}")
 
         vector_map = read_features(data_dir)
@@ -159,5 +160,5 @@ if __name__ == "__main__":
             trajectories, mean_embeddings, args.size, args.min_size, args.max_size
         )
 
-        write_clusters(clusters, data_dir)
+        write_clusters(clusters, data_dir, movie_id)
         print()
