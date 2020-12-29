@@ -16,8 +16,12 @@ def get_embedding(model, face_pixels):
     # transform face into one sample
     samples = np.expand_dims(face_pixels, axis=0)
     # make prediction to get embedding
-    yhat = model.predict(samples)
-    return yhat[0]
+    yhat = model.predict(samples)[0]
+    # Perform L2-normalization as according to facenet paper
+    # (make sure output is on the hypersphere with radius 1.0)
+    yhat /= np.sqrt(np.sum(yhat ** 2))
+
+    return yhat
 
 def load_images_map(images_dir):
     """From all face images, produce an easy lookup table.
