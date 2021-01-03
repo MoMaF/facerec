@@ -120,6 +120,9 @@ def process_video(file, opt: Options):
 
     cap = cv2.VideoCapture(file)
     n_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    # For invalid video files, cap.get return 0.0. Use that as a validity check here.
+    assert n_total_frames > 0, "Invalid video file."
+
     fps = cap.get(cv2.CAP_PROP_FPS)
     video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -259,17 +262,16 @@ if __name__ == "__main__":
         iou_threshold=args.iou_threshold,
     )
 
-    _, ext = os.path.splitext(os.path.basename(args.file))
-    if ext in [".mpeg", ".mpg", ".mp4", ".avi", ".wmv"]:
-        options = Options(
-            n_shards=args.n_shards,
-            shard_i=args.shard_i,
-            save_every=args.save_every,
-            out_path=args.out_path.rstrip("/"),
-            max_trajectory_age=args.max_trajectory_age,
-            min_trajectory=args.min_trajectory,
-        )
-        process_video(args.file, options)
+    # Setup options and run extraction process
+    options = Options(
+        n_shards=args.n_shards,
+        shard_i=args.shard_i,
+        save_every=args.save_every,
+        out_path=args.out_path.rstrip("/"),
+        max_trajectory_age=args.max_trajectory_age,
+        min_trajectory=args.min_trajectory,
+    )
+    process_video(args.file, options)
 
-        minutes, seconds = divmod(time() - start_time, 60)
-        print(f"Completed in {int(minutes)} minutes, {int(seconds)} seconds.")
+    minutes, seconds = divmod(time() - start_time, 60)
+    print(f"Completed in {int(minutes)} minutes, {int(seconds)} seconds.")
