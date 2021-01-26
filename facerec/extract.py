@@ -69,7 +69,7 @@ def save_trajectories(file, trackers, max_w, max_h):
 
     return len(trackers)
 
-def process_frame(frame_data, video_w, video_h, features_file, images_dir, min_trajectory_len):
+def process_frame(frame_data, d_width, d_height, features_file, images_dir, min_trajectory_len):
     """Save faces + features from a frame, and creating face embeddings.
     """
     # Filter to faces with a valid trajectory (len > MIN)
@@ -84,7 +84,7 @@ def process_frame(frame_data, video_w, video_h, features_file, images_dir, min_t
         filtered_box = multi_tracker.get_detection_bbox(face["detection_id"])
 
         # Crop onto face only (tight crop for embedding)
-        tight_box = bbox_float_to_int(filtered_box, video_w, video_h)
+        tight_box = bbox_float_to_int(filtered_box, d_width, d_height)
         cropped = img.crop(tuple(tight_box))
         resized = cropped.resize((FACE_IMAGE_SIZE, FACE_IMAGE_SIZE), resample=Image.BILINEAR)
         # Get face embedding vector via facenet model
@@ -93,7 +93,7 @@ def process_frame(frame_data, video_w, video_h, features_file, images_dir, min_t
         embedding = utils.get_embedding(facenet, scaledx[0])
 
         # Produce padded crop that will be saved to disk (shown during annotation)
-        padded_box = bbox_float_to_int(filtered_box, video_w, video_h, padding=SAVE_FACE_PADDING)
+        padded_box = bbox_float_to_int(filtered_box, d_width, d_height, padding=SAVE_FACE_PADDING)
         padded_img = img.crop(tuple(padded_box))
         padded_img.thumbnail((FACE_IMAGE_SIZE, FACE_IMAGE_SIZE), resample=Image.BILINEAR)
 
@@ -114,6 +114,8 @@ def process_frame(frame_data, video_w, video_h, features_file, images_dir, min_t
             "embedding": embedding.tolist(),
             "box": tight_box,
             "keypoints": face["keypoints"],
+            "w": d_width,
+            "h": d_height,
         }, features_file, indent=None, separators=(",", ":"))
         features_file.write("\n")
 
@@ -229,7 +231,7 @@ def process_video(file, opt: Options):
             frame_data = buf.pop(0)
             if frame_data["index"] % opt.save_every == 0:
                 n_saved_faces = process_frame(
-                    frame_data, video_w, video_h, features_file, images_dir, opt.min_trajectory
+                    frame_data, d_width, d_height, features_file, images_dir, opt.min_trajectory
                 )
                 saved_boxes_count += n_saved_faces
                 saved_frames_count += int(n_saved_faces > 0)
@@ -238,7 +240,7 @@ def process_video(file, opt: Options):
     for frame_data in buf:
         if frame_data["index"] % opt.save_every == 0:
             n_saved_faces = process_frame(
-                frame_data, video_w, video_h, features_file, images_dir, opt.min_trajectory
+                frame_data, d_width, d_height, features_file, images_dir, opt.min_trajectory
             )
             saved_boxes_count += n_saved_faces
             saved_frames_count += int(n_saved_faces > 0)
