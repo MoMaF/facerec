@@ -8,6 +8,7 @@ from time import time
 import cv2
 import numpy as np
 import tensorflow
+import csv
 from PIL import Image, ImageOps
 
 import utils.utils as utils
@@ -20,7 +21,8 @@ SAVE_FACE_PADDING = 0.10  # before saving to disk, add this padding to show more
 
 Options = namedtuple(
     "Options",
-    ["out_path", "n_shards", "shard_i", "save_every", "min_trajectory", "max_trajectory_age"],
+    ["out_path", "n_shards", "shard_i", "save_every", "min_trajectory",
+    "display_width", "display_height", "max_trajectory_age"],
 )
 
 def bbox_float_to_int(bbox_float, max_w, max_h, padding=0.0):
@@ -40,7 +42,7 @@ def bbox_float_to_int(bbox_float, max_w, max_h, padding=0.0):
 
     return [int(c) for c in bbox_float]
 
-def save_trajectories(file, trackers, video_w, video_h):
+def save_trajectories(file, trackers, max_w, max_h):
     """Save trajectories from all given trackers, to file.
     """
     # Extract trajectories from trackers and write to jsonl
@@ -48,7 +50,7 @@ def save_trajectories(file, trackers, video_w, video_h):
         trajectory = []
         detected = []
         for bbox_float, d in trk.history:
-            bbox_int = bbox_float_to_int(bbox_float, video_w, video_h)
+            bbox_int = bbox_float_to_int(bbox_float, max_w, max_h)
             trajectory.append(bbox_int)
             detected.append(d)
 
@@ -127,6 +129,19 @@ def process_video(file, opt: Options):
     video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+    # Attempt to compute display aspect ratio from OpenCV if needed.
+    if opt.display_width is None or opt.display_height is None:
+        sar = video_w / video_h
+        numerator = cap.get(cv2.CAP_PROP_SAR_NUM) or 1.0
+        denominator = cap.get(cv2.CAP_PROP_SAR_DEN) or 1.0
+        par = numerator / denominator
+        dar = sar * par
+        d_height = video_h
+        d_width = round(video_h * dar)
+    else:
+        d_height = opt.display_height
+        d_width = opt.display_width
+
     shard_len = (n_total_frames + opt.n_shards - 1) // opt.n_shards
     beg = shard_len * opt.shard_i
     end = min(beg + shard_len, n_total_frames)  # not inclusive
@@ -155,6 +170,8 @@ def process_video(file, opt: Options):
 
     print(f"Movie file: {os.path.basename(file)}")
     print(f"Total length: {(n_total_frames / fps / 3600):.1f}h ({fps} fps)")
+    print(f"Storage resolution for film: {video_w}x{video_h}")
+    print(f"Used display resolution for film: {d_width}x{d_height}")
     print(f"Shard {(opt.shard_i + 1)} / {opt.n_shards}, len: {shard_len} frames")
     print(f"Processing frames: {beg} - {end} (max: {n_total_frames})")
 
@@ -171,6 +188,10 @@ def process_video(file, opt: Options):
 
         if not ret:
             break
+
+        # If required, resize the frame to display aspect ratio.
+        if d_width != video_w or d_height != video_h:
+            frame = cv2.resize(frame, (d_width, d_height))
 
         frame_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         scene_change_happened = scene.update(np.array(frame_img))
@@ -197,7 +218,7 @@ def process_video(file, opt: Options):
 
         # Clean up expired trajectories (-> save to file)
         expired_tracks = multi_tracker.pop_expired(2 * opt.min_trajectory, f)
-        saved_traj_count += save_trajectories(trajectories_file, expired_tracks, video_w, video_h)
+        saved_traj_count += save_trajectories(trajectories_file, expired_tracks, d_width, d_height)
 
         # For some frames, we save images + features
         if len(buf) == opt.min_trajectory and f < end:
@@ -219,7 +240,7 @@ def process_video(file, opt: Options):
             saved_frames_count += int(n_saved_faces > 0)
 
     expired_tracks = multi_tracker.pop_expired(expiry_age=0)
-    saved_traj_count += save_trajectories(trajectories_file, expired_tracks, video_w, video_h)
+    saved_traj_count += save_trajectories(trajectories_file, expired_tracks, d_width, d_height)
 
     # Save scene changes to file
     with open(scene_changes_path, "w") as f:
@@ -251,6 +272,27 @@ if __name__ == "__main__":
     facenet = tensorflow.keras.models.load_model("models/facenet_keras.h5")
     facenet.load_weights("models/facenet_keras_weights.h5")
 
+    # Attempt reading precomputed display aspect ratios (DAR) for video files.
+    # Not strictly needed but useful for a great result.
+    # This is a way to deal with wonky pixel aspect ratios. More info:
+    # https://gist.github.com/ekreutz/91f262f96fdf8f20949a27b88f7f4935
+    file_basename = os.path.basename(args.file)
+    aspects_path = "aspect_ratios.csv"
+    display_width = None
+    display_height = None
+    if os.path.exists(aspects_path):
+        csv_file = open(aspects_path, "r")
+        reader = csv.reader(csv_file, delimiter=",", quotechar='"')
+        headers = next(reader)
+        # Required columns: filename, display_width, display_height
+        name_i, w_i, h_i = list(map(headers.index, ["filename", "display_width", "display_height"]))
+        for row in reader:
+            if row[name_i] == file_basename:
+                display_width = int(row[w_i])
+                display_height = int(row[h_i])
+                break
+        csv_file.close()
+
     # Comment out 1, same wrapped api!
     # detector = MTCNNDetector()
     detector = RetinaFaceDetector(min_face_size=args.min_face_size)
@@ -270,6 +312,8 @@ if __name__ == "__main__":
         out_path=args.out_path.rstrip("/"),
         max_trajectory_age=args.max_trajectory_age,
         min_trajectory=args.min_trajectory,
+        display_width=display_width,
+        display_height=display_height,
     )
     process_video(args.file, options)
 
