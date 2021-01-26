@@ -54,11 +54,15 @@ def save_trajectories(file, trackers, max_w, max_h):
             trajectory.append(bbox_int)
             detected.append(d)
 
+        # Note: `index` and `movie_id` keys are added in `merge_shards.py`
         out_obj = {
             "start": trk.first_frame,
             "len": len(trajectory),
             "bbs": trajectory,
             "detected": detected,
+            "w": max_w,
+            "h": max_h,
+            "object_type": "face",
         }
         json.dump(out_obj, file, indent=None, separators=(",", ":"))
         file.write("\n")
