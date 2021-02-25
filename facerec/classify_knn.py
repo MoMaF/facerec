@@ -9,6 +9,8 @@ import numpy as np
 
 from utils.utils import read_features, get_vectors
 
+
+ACTOR_ID_PREFIX = "momaf:elonet_henkilo_"
 ACTORS_PATH = "./actors.csv"
 ACTOR_IMAGES_PATH = "./actor_images.csv"
 ACTOR_EMBEDDINGS_PATH = "./actor_embeddings.jsonl"
@@ -141,7 +143,7 @@ def classify(data_dir, X, y, save_p_higher=0.05):
         # Save only predictions higher than some minimum
         passed_min = np.where(cluster_pred > save_p_higher)[0]
         cluster_preds[int(ci)] = {
-            int(classes[i]): round(float(cluster_pred[i]), 5) for i in passed_min
+            f"{ACTOR_ID_PREFIX}{classes[i]}": round(float(cluster_pred[i]), 5) for i in passed_min
         }
 
     # Save predictions to file
