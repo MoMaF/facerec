@@ -1,3 +1,5 @@
+#! /usr/bin/env python3
+
 """Merge data produced in different shards of extraction.
 
 Namely:
