@@ -60,7 +60,9 @@ Produces a file `clusters.json` within `12345-data`.
 
 ### `facerec/classify_knn.py`
 
-Perform classification on a cluster level. These predictions are used as initial guesses in the annotation tool. This script requires the presence of some additional files/features to work (TODO).
+Perform classification on a cluster level. These predictions are used as initial guesses in the annotation tool. This script requires the presence of some additional files/features to work. These files are pre-computed embeddings for database images of the actors; precomputed embedding vectors and other metadata.
+
+Put the files (download sample [here](https://drive.google.com/file/d/1GFOCDFkrTsMBV29Uwpioq6JFrcgQY0X1/view?usp=sharing)) into the root path of facerec, from where you want to run `facerec/classify_knn.py`. The files have the names `actors.csv`, `actor_images.csv`, `actor_embeddings.jsonl`.
 
 Example run:
 
