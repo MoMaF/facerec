@@ -1,3 +1,5 @@
+#! /usr/bin/env python3
+
 import os
 import sys
 import argparse
@@ -129,7 +131,7 @@ def process_video(file, opt: Options):
     cap = cv2.VideoCapture(file)
     n_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     # For invalid video files, cap.get return 0.0. Use that as a validity check here.
-    assert n_total_frames > 0, "Invalid video file."
+    assert n_total_frames > 0, "Invalid video file <"+file+"> cwd="+os.getcwd()
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -156,7 +158,16 @@ def process_video(file, opt: Options):
 
     # We'll write (face) images, features, trajectories and scene changes to disk
     basename_no_ext, _ = os.path.splitext(os.path.basename(file))
-    movie_id = int(basename_no_ext.split("-")[0])
+    basename_no_ext_split = basename_no_ext.split("-")
+    if basename_no_ext_split[0].isdigit(): # MoMaF
+        movie_id = int(basename_no_ext_split[0])
+    else: # USSEE
+        alld = ""
+        for zs in basename_no_ext_split:
+            if zs.isdigit():
+                alld += zs
+        movie_id = int(alld)
+    
     features_dir = f"{opt.out_path}/{movie_id}-data/features"
     trajectories_dir = f"{opt.out_path}/{movie_id}-data/trajectories"
     scene_changes_dir = f"{opt.out_path}/{movie_id}-data/scene_changes"
@@ -179,7 +190,8 @@ def process_video(file, opt: Options):
     print(f"Storage resolution for film: {video_w}x{video_h}")
     print(f"Used display resolution for film: {d_width}x{d_height}")
     print(f"Shard {(opt.shard_i + 1)} / {opt.n_shards}, len: {shard_len} frames")
-    print(f"Processing frames: {beg} - {end} (max: {n_total_frames})")
+    print(f"Processing frames: {beg} - {end} (max: {n_total_frames}) "
+          f"saving every 1/{opt.save_every} frames")
 
     buf = []
     saved_frames_count = 0
@@ -192,7 +204,9 @@ def process_video(file, opt: Options):
     for f in range(beg, end_with_overlap):
         ret, frame = cap.read()
 
+        # print('frame', f)
         if not ret:
+            # print('break')
             break
 
         # If required, resize the frame to display aspect ratio.
