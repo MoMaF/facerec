@@ -361,7 +361,8 @@ class Sort(object):
                 for det_id in detection_ids:
                     del self.detection_id_map[det_id]
                     if debug:
-                        print('deleted', det_id, trk_id, trk_age, expiry_age, current_frame, trk.first_frame, len(trk), trk.time_since_update)
+                        print('deleted', det_id, trk_id, trk_age, expiry_age, current_frame,
+                              trk.first_frame, len(trk), trk.time_since_update)
                     del self.frame_map[det_id]
 
                 # Add valid trackers to the list we'll return
@@ -371,6 +372,7 @@ class Sort(object):
                     expired_trackers.append(trk)
             elif debug:
                 for det_id in detection_ids:
-                    print('not deleted', det_id, trk_id, trk_age, expiry_age, current_frame, trk.first_frame, len(trk), trk.time_since_update)
+                    print('not deleted', det_id, trk_id, trk_age, expiry_age, current_frame,
+                          trk.first_frame, len(trk), trk.time_since_update)
                     
         return expired_trackers
