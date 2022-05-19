@@ -171,7 +171,7 @@ def merge(
     print(f"Read a total {len(scene_cuts)} scene changes.")
 
     # Load image lookup map that allows to check if a frame + bbs combo has an image
-    image_map = load_images_map(images_dir)
+    image_map = load_images_map(images_dir, features_dir)
 
     out_file = open(os.path.join(data_dir, "trajectories.jsonl"), "w")
     trajectories = []
