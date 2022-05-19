@@ -23,7 +23,7 @@ def get_embedding(model, face_pixels):
 
     return yhat
 
-def load_images_map(images_dir):
+def load_images_map(images_dir, features_dir = None):
     """From all face images, produce an easy lookup table.
 
     Format: {frame_index1: set(bbs_tuple1, bbs_tuple2, etc...)}
@@ -42,6 +42,21 @@ def load_images_map(images_dir):
         if frame_i not in image_map:
             image_map[frame_i] = set()
         image_map[frame_i].add(bbox)
+
+    if len(image_map)==0 and features_dir is not None:
+        _, _, files = next(os.walk(features_dir))
+        for name in files:
+            _, ext = os.path.splitext(os.path.basename(name))
+            if ext != ".jsonl":
+                continue
+            for l in open(features_dir+'/'+name):
+                s = json.loads(l)
+                frame_i = s["frame"]
+                bbox = tuple(s["box"])
+                if frame_i not in image_map:
+                    image_map[frame_i] = set()
+                image_map[frame_i].add(bbox)
+
     return image_map
 
 def read_features(data_dir: str):
