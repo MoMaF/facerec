@@ -24,8 +24,10 @@ SAVE_FACE_PADDING = 0.10  # before saving to disk, add this padding to show more
 Options = namedtuple(
     "Options",
     ["out_path", "n_shards", "shard_i", "save_every", "min_trajectory",
-    "display_width", "display_height", "max_trajectory_age"],
+     "display_width", "display_height", "max_trajectory_age", "save_images"],
 )
+
+debug = False
 
 def bbox_float_to_int(bbox_float, max_w, max_h, padding=0.0):
     """Convert float bounding box to integers.
@@ -71,9 +73,13 @@ def save_trajectories(file, trackers, max_w, max_h):
 
     return len(trackers)
 
-def process_frame(frame_data, d_width, d_height, features_file, images_dir, min_trajectory_len):
+def process_frame(frame_data, d_width, d_height, features_file, images_dir,
+                  min_trajectory_len, save_image):
     """Save faces + features from a frame, and creating face embeddings.
     """
+    if debug:
+        for face in frame_data["faces"]:
+            print(multi_tracker.has_valid_tracker_safe(face["detection_id"]), face)
     # Filter to faces with a valid trajectory (len > MIN)
     valid_faces = [
         face for face in frame_data["faces"]
@@ -109,7 +115,8 @@ def process_frame(frame_data, d_width, d_height, features_file, images_dir, min_
         # Note: the box is named after the tight crop, even though the saved image
         # uses the padded box
         box_tag = frame_data["tag"] + ":{}_{}_{}_{}".format(*tight_box)
-        padded_img.save(f"{images_dir}/{box_tag}.jpeg", quality=65)
+        if save_image:
+            padded_img.save(f"{images_dir}/{box_tag}.jpeg", quality=65)
         json.dump({
             "frame": frame_data["index"],
             "tag": box_tag,
@@ -202,6 +209,8 @@ def process_video(file, opt: Options):
     end_with_overlap = min(end + opt.max_trajectory_age, n_total_frames)
 
     for f in range(beg, end_with_overlap):
+        if debug:
+            print('I frame', f)
         ret, frame = cap.read()
 
         # print('frame', f)
@@ -215,7 +224,7 @@ def process_video(file, opt: Options):
 
         frame_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         scene_change_happened = scene.update(np.array(frame_img))
-
+        
         faces = detector.detect(frame_img)
         buf.append({
             "index": f,
@@ -228,6 +237,8 @@ def process_video(file, opt: Options):
         if scene_change_happened:
             scene_changes.append(f)
             multi_tracker.kill_trackers()
+            if debug:
+                print("scene changed")
 
         # Let the tracker know of new detections
         detections = np.array([[*f["box"], 0.95] for f in faces]).reshape((-1, 5))
@@ -241,20 +252,29 @@ def process_video(file, opt: Options):
         saved_traj_count += save_trajectories(trajectories_file, expired_tracks, d_width, d_height)
 
         # For some frames, we save images + features
-        if len(buf) == opt.min_trajectory and f < end:
+        # used to include additional condition "and f < end" until 2022-05-19
+        if len(buf) == opt.min_trajectory:
             frame_data = buf.pop(0)
+            if debug:
+                facelist = [ str(ff["detection_id"]) for ff in frame_data["faces"] ]
+                print('A frame', frame_data['index'], ', '.join(facelist))
             if frame_data["index"] % opt.save_every == 0:
                 n_saved_faces = process_frame(
-                    frame_data, d_width, d_height, features_file, images_dir, opt.min_trajectory
+                    frame_data, d_width, d_height, features_file, images_dir,
+                    opt.min_trajectory, opt.save_images
                 )
                 saved_boxes_count += n_saved_faces
                 saved_frames_count += int(n_saved_faces > 0)
 
     # Save remaining frames and trajectories
     for frame_data in buf:
+        if debug:
+            facelist = [ str(ff["detection_id"]) for ff in frame_data["faces"] ]
+            print('B frame', frame_data['index'], facelist)
         if frame_data["index"] % opt.save_every == 0:
             n_saved_faces = process_frame(
-                frame_data, d_width, d_height, features_file, images_dir, opt.min_trajectory
+                frame_data, d_width, d_height, features_file, images_dir,
+                opt.min_trajectory, opt.save_images 
             )
             saved_boxes_count += n_saved_faces
             saved_frames_count += int(n_saved_faces > 0)
@@ -274,6 +294,8 @@ def process_video(file, opt: Options):
     print(f"and {saved_traj_count} trajectories.")
 
 if __name__ == "__main__":
+    if debug:
+        print(sys.argv)
     parser = argparse.ArgumentParser(allow_abbrev=True)
     parser.add_argument("--n-shards", type=int, default=256)
     parser.add_argument("--shard-i", type=int, required=True)
@@ -283,6 +305,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-trajectory-age", type=int, default=5)
     parser.add_argument("--min-face-size", type=int, default=0)
     parser.add_argument("--out-path", type=str, default="./data")
+    parser.add_argument("--no-images", action="store_true")
     parser.add_argument("file")
     args = parser.parse_args()
 
@@ -334,6 +357,7 @@ if __name__ == "__main__":
         min_trajectory=args.min_trajectory,
         display_width=display_width,
         display_height=display_height,
+        save_images=not args.no_images
     )
     process_video(args.file, options)
 
