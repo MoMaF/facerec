@@ -21,6 +21,7 @@ import numpy as np
 from filterpy.kalman import KalmanFilter
 from scipy.optimize import linear_sum_assignment
 
+debug = False
 
 def linear_assignment(utility_matrix):
     """Solves the linear assignment problem.
@@ -266,8 +267,11 @@ class Sort(object):
         for det_index, trk_index in matched:
             trk: KalmanBoxTracker = self.trackers[trk_index]
             trk.update(detections[det_index])
+            prev = self.tracker_id_map[trk.id][-1]
             self.tracker_id_map[trk.id].append(detections_idx[det_index])
             self.detection_id_map[detections_idx[det_index]] = trk
+            if debug:
+                print('updated', detections_idx[det_index], prev, det_index, trk_index)
 
         # Unfollow trackers that have "expired" (note: still exist in detection_id_map)
         for i in reversed(range(len(self.trackers))):
@@ -284,6 +288,8 @@ class Sort(object):
             self.trackers.append(trk)
             self.tracker_id_map[trk.id] = [detections_idx[det_index]]
             self.detection_id_map[detections_idx[det_index]] = trk
+            if debug:
+                print('added', detections_idx[det_index], det_index, frame)
 
         # Return the new globally unique indices for each detection
         return detections_idx
@@ -295,11 +301,22 @@ class Sort(object):
         be valid.
         """
         trk = self.detection_id_map.get(detection_id)
-        assert trk is not None, "Tried to access non-existent tracker!"
+        assert trk is not None, "Tried to access non-existent tracker <"+str(detection_id)+">"
 
         # TODO: more criteria?
         start_ok = trk.initial_hits >= self.min_hits and not trk.had_nan_preds
         return start_ok
+
+    def has_valid_tracker_safe(self, detection_id):
+        """Indicates whether a tracker associated with an id is valid.
+
+        Note: the tracker could be either active or inactive/expired, and still
+        be valid.
+        """
+        if debug:
+            print('detection_id_map', list(self.detection_id_map.keys()))
+        trk = self.detection_id_map.get(detection_id)
+        return trk is not None
 
     def get_detection_bbox(self, detection_id):
         """Get the filtered (by Kalman) bbox for a detection.
@@ -333,6 +350,8 @@ class Sort(object):
         expired_trackers = []
         for trk_id in list(self.tracker_id_map.keys()):
             detection_ids = self.tracker_id_map[trk_id]
+            if debug:
+                print('detection_ids', trk_id, detection_ids)
             trk = self.detection_id_map[detection_ids[0]]
             trk_age = current_frame - (trk.first_frame + len(trk) - trk.time_since_update - 1)
             assert trk_age >= 0, "Age less than zero?"
@@ -341,6 +360,8 @@ class Sort(object):
                 del self.tracker_id_map[trk_id]
                 for det_id in detection_ids:
                     del self.detection_id_map[det_id]
+                    if debug:
+                        print('deleted', det_id, trk_id, trk_age, expiry_age, current_frame, trk.first_frame, len(trk), trk.time_since_update)
                     del self.frame_map[det_id]
 
                 # Add valid trackers to the list we'll return
@@ -348,5 +369,8 @@ class Sort(object):
                     # Remove predicted stuff at the end that weren't observations
                     trk.history = trk.history[:len(trk) - trk.time_since_update]
                     expired_trackers.append(trk)
-
+            elif debug:
+                for det_id in detection_ids:
+                    print('not deleted', det_id, trk_id, trk_age, expiry_age, current_frame, trk.first_frame, len(trk), trk.time_since_update)
+                    
         return expired_trackers
