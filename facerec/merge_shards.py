@@ -21,6 +21,7 @@ def is_trajectory_valid(trajectory, images_map):
     """
     # TODO: add min count instead?
     for frame_index, bbs in enumerate(trajectory["bbs"], start=trajectory["start"]):
+        # print(frame_index, bbs, frame_index in images_map, tuple(bbs) in images_map[frame_index])
         if frame_index in images_map and tuple(bbs) in images_map[frame_index]:
             return True
     return False
@@ -32,6 +33,7 @@ def passes_min_size(trajectory, min_face_size):
     for bbs in trajectory["bbs"]:
         # Bounding boxes (bbs) are: x1, y1, x2, y2
         w, h = (bbs[2] - bbs[0]), (bbs[3] - bbs[1])
+        # print(w, h, min_face_size)
         if min(w, h) < min_face_size:
             return False
     return True
@@ -43,6 +45,7 @@ def save_trajectories(file, trajectories, images_map, min_face_size, traj_count,
     # Write out .jsonl
     n_saved = 0
     for traj in trajectories:
+        # print(traj)
         if is_trajectory_valid(traj, images_map) and passes_min_size(traj, min_face_size):
             traj["index"] = traj_count
             traj["movie_id"] = movie_id
@@ -172,6 +175,7 @@ def merge(
 
     # Load image lookup map that allows to check if a frame + bbs combo has an image
     image_map = load_images_map(images_dir, features_dir)
+    print(f"Read {len(image_map)} images.")
 
     out_file = open(os.path.join(data_dir, "trajectories.jsonl"), "w")
     trajectories = []
