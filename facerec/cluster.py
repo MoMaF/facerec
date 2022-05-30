@@ -27,8 +27,14 @@ def read_trajectories(data_dir: str, vector_map):
     return trajectories, mean_embeddings
 
 def cluster_once(vectors, n_clusters):
+    #print(vectors, type(vectors), vectors.shape)
+    if vectors.shape[0]==0:
+        return np.array([], dtype=np.int32)
+    if vectors.shape[0]==1:
+        return np.array([1], dtype=np.int32)
     link = cluster.hierarchy.linkage(vectors, method="complete")
     clusters = cluster.hierarchy.fcluster(link, t=n_clusters, criterion="maxclust")
+    #print(clusters, type(clusters), clusters.dtype)
     return clusters
 
 def split_and_merge(clusters, min_size=20, max_size=40):
