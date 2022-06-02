@@ -24,6 +24,7 @@ def is_trajectory_valid(trajectory, images_map):
         # print(frame_index, bbs, frame_index in images_map, tuple(bbs) in images_map[frame_index])
         if frame_index in images_map and tuple(bbs) in images_map[frame_index]:
             return True
+    # print('not valid', trajectory)
     return False
 
 def passes_min_size(trajectory, min_face_size):
@@ -34,7 +35,21 @@ def passes_min_size(trajectory, min_face_size):
         # Bounding boxes (bbs) are: x1, y1, x2, y2
         w, h = (bbs[2] - bbs[0]), (bbs[3] - bbs[1])
         # print(w, h, min_face_size)
+        if min(w, h) >= min_face_size:
+            return True
+    # print('not enough size', trajectory)
+    return False
+
+def passes_min_size_old(trajectory, min_face_size):
+    """Check that faces have a certain minimum (pixel) size. This is useful if
+    we want to have reliable embedddings of images in a trajectory.
+    """
+    for bbs in trajectory["bbs"]:
+        # Bounding boxes (bbs) are: x1, y1, x2, y2
+        w, h = (bbs[2] - bbs[0]), (bbs[3] - bbs[1])
+        # print(w, h, min_face_size)
         if min(w, h) < min_face_size:
+            # print('not enough size', trajectory)
             return False
     return True
 
@@ -45,7 +60,7 @@ def save_trajectories(file, trajectories, images_map, min_face_size, traj_count,
     # Write out .jsonl
     n_saved = 0
     for traj in trajectories:
-        # print(traj)
+        # print('x', traj)
         if is_trajectory_valid(traj, images_map) and passes_min_size(traj, min_face_size):
             traj["index"] = traj_count
             traj["movie_id"] = movie_id
@@ -82,6 +97,9 @@ def load_trajectory(trajectory_file: str, scene_cuts: Set[int], iou_threshold: f
     with open(trajectory_file, "r") as f:
         trajectories = sorted([json.loads(line) for line in f], key=lambda t: t["start"])
 
+    # for t in trajectories:
+    #     print('a', trajectory_file, t)
+        
     merged_trajectories = []
     merged_indices = set()
 
@@ -109,6 +127,9 @@ def load_trajectory(trajectory_file: str, scene_cuts: Set[int], iou_threshold: f
                 merged_indices.add(best_j)
         merged_trajectories.append(t1)
 
+    # for t in merged_trajectories:
+    #     print('b', trajectory_file, t)
+        
     # Return final trajectories + number of merges made
     n_merges = len(trajectories) - len(merged_trajectories)
     return merged_trajectories, n_merges
@@ -194,6 +215,11 @@ def merge(
         mergables = [t for t in new_trajectories if t["start"] < file["s"] + overlap]
         others = [t for t in new_trajectories if t["start"] >= file["s"] + overlap]
 
+        # for t in mergables:
+        #     print('c', t)
+        # for t in others:
+        #     print('d', t)
+
         expired = [t for t in trajectories if (t["start"] + t["len"]) < file["s"]]
         trajectories = [t for t in trajectories if (t["start"] + t["len"]) >= file["s"]]
 
@@ -221,6 +247,8 @@ def merge(
 
             # A merge was found!
             if best_t is not None:
+                # print('e', t1)
+                # print('ex', best_t)
                 n_merges += 1
                 assumed_len = t1["start"] + t1["len"] - best_t["start"]
                 best_t["bbs"] = best_t["bbs"][:(t1["start"] - best_t["start"])] + t1["bbs"]
@@ -229,6 +257,7 @@ def merge(
                 assert best_t["len"] == assumed_len, "Len???"
             else:
                 others.append(t1)
+                # print('f', t1)
 
         trajectories += others
 
