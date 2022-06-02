@@ -1,3 +1,5 @@
+#! /usr/bin/env python3
+
 import os
 import json
 import argparse
@@ -159,7 +161,7 @@ def classify(data_dir, X, y, save_p_higher=0.05):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(allow_abbrev=True)
-    parser.add_argument("--path", type=str, default="./data/113528-data",
+    parser.add_argument("--path", type=str,
                         help="Path to data directory for a film.")
     args = parser.parse_args()
 
