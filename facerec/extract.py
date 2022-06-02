@@ -147,12 +147,16 @@ def process_video(file, opt: Options):
     # Attempt to compute display aspect ratio from OpenCV if needed.
     if opt.display_width is None or opt.display_height is None:
         sar = video_w / video_h
-        numerator = cap.get(cv2.CAP_PROP_SAR_NUM) or 1.0
-        denominator = cap.get(cv2.CAP_PROP_SAR_DEN) or 1.0
+        num = cap.get(cv2.CAP_PROP_SAR_NUM)
+        den = cap.get(cv2.CAP_PROP_SAR_DEN)
+        numerator   = num or 1.0
+        denominator = den or 1.0
         par = numerator / denominator
         dar = sar * par
         d_height = video_h
         d_width = round(video_h * dar)
+        print('fps={} video_w={} video_h={} sar={} num={} den={} par={} dar={} d_width={}'.
+              format(fps, video_w, video_h, sar, num, den, par, dar, d_width))
     else:
         d_height = opt.display_height
         d_width = opt.display_width
@@ -218,10 +222,15 @@ def process_video(file, opt: Options):
             # print('break')
             break
 
+        frame_h, frame_w, _ = frame.shape
         # If required, resize the frame to display aspect ratio.
         if d_width != video_w or d_height != video_h:
             frame = cv2.resize(frame, (d_width, d_height))
 
+        if f==beg:
+            print(frame_h, frame_w, ':', video_h, video_w, ':',
+                  d_height, d_width, ':', frame.shape)                  
+            
         frame_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         scene_change_happened = scene.update(np.array(frame_img))
         
