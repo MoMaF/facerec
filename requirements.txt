@@ -4,6 +4,6 @@ matplotlib
 scikit-learn
 scipy
 retinaface
-tensorflow==2.3
+tensorflow==2.9.3
 filterpy
 opencv-python
