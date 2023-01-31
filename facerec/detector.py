@@ -11,12 +11,32 @@ Standard return format: {
     }
 }
 """
+
 import mtcnn
 from retinaface import RetinaFace
 import numpy as np
 
+class FaceNetDetector:
+    def __init__(self, min_face_size=20, face_threshold=0.95):
+        # self.model = FaceNet() # uses MTCNN with default min_face_size=20
+        self.model = mtcnn.MTCNN(min_face_size=min_face_size)
+        self.face_threshold = face_threshold
+
+    def detect(self, img: np.array):
+        assert len(img.shape) == 3 and img.shape[2] == 3
+        bbs = [d for d in self.model.detect_faces(img) if d['confidence'] > self.face_threshold]
+
+        # Convert from x1, y1, w, h --> x1, y1, x2, y2 for boxes
+        for b in bbs:
+            del b["confidence"] # why?
+            b["box"][2] += b["box"][0]
+            b["box"][3] += b["box"][1]
+
+        return bbs
+
 class MTCNNDetector:
     def __init__(self):
+        assert False
         self.model = mtcnn.MTCNN(min_face_size=20)
 
     def detect(self, img: np.array):
@@ -39,6 +59,7 @@ class RetinaFaceDetector:
             min_face_size (int): minimum size of a face to be considered a match.
                 Compared against min(width, height) of the face bounding box.
         """
+        assert False
         self.min_size = min_face_size
         self.model = RetinaFace(quality="normal")
 

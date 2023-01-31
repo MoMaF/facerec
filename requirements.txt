@@ -3,7 +3,8 @@ Pillow
 matplotlib
 scikit-learn
 scipy
-retinaface
-tensorflow==2.3
+#retinaface
+#tensorflow
 filterpy
 opencv-python
+keras-facenet

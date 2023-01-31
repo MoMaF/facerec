@@ -276,16 +276,17 @@ def merge(
     print(f"Done! Read {n_read} trajectories and saved {n_saved}.")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(allow_abbrev=True)
+    parser = argparse.ArgumentParser(allow_abbrev=True,
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--iou-threshold", type=float, default=0.5,
-                        help="IOU threshold when merging bounding boxes.")
+                        help="IOU threshold when merging bounding boxes")
     parser.add_argument("--overlap", type=int, default=5,
-                        help="""Overlap to consider when merging across shards. Should
-                        match the max-trajectory-age that was used when extracting.""")
+                        help="""overlap to consider when merging across shards, should
+                        match the max-trajectory-age that was used when extracting""")
     parser.add_argument("--min-face-size", type=int, default=50,
-                        help="""If bigger than zero, will filter trajectories that
-                        have faces where `min(w, h) < min-face-size`.""")
-    parser.add_argument("--path", type=str, default=".")
+                        help="""if bigger than zero, will filter trajectories that
+                        have faces where `min(w, h) < min-face-size`""")
+    parser.add_argument("--path", type=str, default=".", help="directory in which to find features, scene_changes, trajectories")
     args = parser.parse_args()
 
     data_dirs = glob.glob(args.path)

@@ -59,7 +59,7 @@ def load_images_map(images_dir, features_dir = None):
 
     return image_map
 
-def read_features(data_dir: str):
+def read_features_old(data_dir: str):
     features_file = os.path.join(data_dir, "features.jsonl")
     vector_map = {}
     with open(features_file, "r") as file:
@@ -73,7 +73,7 @@ def read_features(data_dir: str):
     # Map frame_index, box -> vector
     return vector_map
 
-def get_vectors(trajectory, vector_map):
+def get_vectors_old(trajectory, vector_map):
     """Read out all existing embedding vectors from a trajectory.
 
     Args:
@@ -85,4 +85,32 @@ def get_vectors(trajectory, vector_map):
         tup_bbs = tuple(bbs)
         if frame in vector_map and tup_bbs in vector_map[frame]:
             vectors.append(vector_map[frame][tup_bbs])
+    return np.array(vectors, dtype=np.float32)
+
+def read_features(data_dir: str):
+    features_file = os.path.join(data_dir, "features.jsonl")
+    vector_map = {}
+    with open(features_file, "r") as file:
+        for line in file:
+            obj = json.loads(line)
+            frame, box = obj["frame"], tuple(obj["box"])
+            if frame not in vector_map:
+                vector_map[frame] = {}
+            vector_map[frame][box] = obj["embeddings"]
+    # Map frame_index, box -> vector
+    return vector_map
+
+def get_vectors(trajectory, vector_map, emb_name):
+    """Read out all existing embedding vectors from a trajectory.
+
+    Args:
+        trajectory: Dict - from trajectories file.
+        vector_map: From read_features.
+    """
+    vectors = []
+    for frame, bbs in enumerate(trajectory["bbs"], start=trajectory["start"]):
+        tup_bbs = tuple(bbs)
+        if frame in vector_map and tup_bbs in vector_map[frame]:
+            vectors.append(np.array(vector_map[frame][tup_bbs][emb_name],
+                                    dtype=np.float32))
     return np.array(vectors, dtype=np.float32)

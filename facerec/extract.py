@@ -14,9 +14,15 @@ import csv
 from PIL import Image, ImageOps
 
 import utils.utils as utils
-from detector import MTCNNDetector, RetinaFaceDetector
+from detector import FaceNetDetector, MTCNNDetector, RetinaFaceDetector
 from sort import Sort
 from scene import SceneChangeDetector
+
+from keras_facenet import FaceNet
+from keras_facenet.utils import cropBox
+
+facenet_models = [ '20180402-114759', '20180408-102900',
+                   '20170511-185253', '20170512-110547' ]
 
 FACE_IMAGE_SIZE = 160  # save face crops in this image resolution! (required!)
 SAVE_FACE_PADDING = 0.10  # before saving to disk, add this padding to show more face
@@ -73,8 +79,9 @@ def save_trajectories(file, trackers, max_w, max_h):
 
     return len(trackers)
 
-def process_frame(frame_data, d_width, d_height, features_file, images_dir,
-                  min_trajectory_len, save_image):
+# to be obsoleted:
+def process_frame_old(frame_data, d_width, d_height, features_file, images_dir,
+                      min_trajectory_len, save_image):
     """Save faces + features from a frame, and creating face embeddings.
     """
     if debug:
@@ -121,6 +128,65 @@ def process_frame(frame_data, d_width, d_height, features_file, images_dir,
             "frame": frame_data["index"],
             "tag": box_tag,
             "embedding": embedding.tolist(),
+            "box": tight_box,
+            "keypoints": face["keypoints"],
+            "w": d_width,
+            "h": d_height,
+        }, features_file, indent=None, separators=(",", ":"))
+        features_file.write("\n")
+
+    return len(valid_faces)
+
+def process_frame_new(frame_data, d_width, d_height, features_file, images_dir,
+                      min_trajectory_len, save_image):
+    """Save faces + features from a frame, and creating face embeddings.
+    """
+    if debug:
+        for face in frame_data["faces"]:
+            print(multi_tracker.has_valid_tracker_safe(face["detection_id"]), face)
+    # Filter to faces with a valid trajectory (len > MIN)
+    valid_faces = [
+        face for face in frame_data["faces"]
+        if multi_tracker.has_valid_tracker(face["detection_id"])
+    ]
+
+    img_np = frame_data["img_np"]
+    img = Image.fromarray(img_np)
+    for face in valid_faces:
+        # Retrieve the posterior bbox filtered by the Kalman filter
+        filtered_box = multi_tracker.get_detection_bbox(face["detection_id"])
+
+        # Crop onto face only (tight crop for embedding)
+        tight_box = bbox_float_to_int(filtered_box, d_width, d_height)
+        det = { 'box': [tight_box[0], tight_box[1],
+                        tight_box[2]-tight_box[0], tight_box[3]-tight_box[1]] }
+        margin = int(0.1*160)
+        cropped = cropBox(img_np, detection=det, margin=margin)
+        #print(cropped)
+        embeddings = { i : embedders[i].embeddings([cropped])[0].tolist()
+                       for i in embedders.keys() }
+
+        # Produce padded crop that will be saved to disk (shown during annotation)
+        padded_box = bbox_float_to_int(filtered_box, d_width, d_height, padding=SAVE_FACE_PADDING)
+        padded_img = img.crop(tuple(padded_box))
+        padded_img.thumbnail((FACE_IMAGE_SIZE, FACE_IMAGE_SIZE), resample=Image.BILINEAR)
+
+        # Determine if cropped image is actually grayscale. If so, convert.
+        padded_a = np.array(padded_img).reshape((-1, 3))
+        is_gray = np.all(padded_a[:,0] == padded_a[:,1])
+        if is_gray:
+            padded_img = ImageOps.grayscale(padded_img)
+
+        # Save face image and features
+        # Note: the box is named after the tight crop, even though the saved image
+        # uses the padded box
+        box_tag = frame_data["tag"] + ":{}_{}_{}_{}".format(*tight_box)
+        if save_image:
+            padded_img.save(f"{images_dir}/{box_tag}.jpeg", quality=65)
+        json.dump({
+            "frame": frame_data["index"],
+            "tag": box_tag,
+            "embeddings": embeddings,
             "box": tight_box,
             "keypoints": face["keypoints"],
             "w": d_width,
@@ -268,7 +334,7 @@ def process_video(file, opt: Options):
                 facelist = [ str(ff["detection_id"]) for ff in frame_data["faces"] ]
                 print('A frame', frame_data['index'], ', '.join(facelist))
             if frame_data["index"] % opt.save_every == 0:
-                n_saved_faces = process_frame(
+                n_saved_faces = process_frame_new(
                     frame_data, d_width, d_height, features_file, images_dir,
                     opt.min_trajectory, opt.save_images
                 )
@@ -281,7 +347,7 @@ def process_video(file, opt: Options):
             facelist = [ str(ff["detection_id"]) for ff in frame_data["faces"] ]
             print('B frame', frame_data['index'], facelist)
         if frame_data["index"] % opt.save_every == 0:
-            n_saved_faces = process_frame(
+            n_saved_faces = process_frame_new(
                 frame_data, d_width, d_height, features_file, images_dir,
                 opt.min_trajectory, opt.save_images 
             )
@@ -303,26 +369,27 @@ def process_video(file, opt: Options):
     print(f"and {saved_traj_count} trajectories.")
 
 if __name__ == "__main__":
-    if debug:
+    if True or debug:
         print(sys.argv)
-    parser = argparse.ArgumentParser(allow_abbrev=True)
-    parser.add_argument("--n-shards", type=int, default=256)
-    parser.add_argument("--shard-i", type=int, required=True)
-    parser.add_argument("--save-every", type=int, default=5)
-    parser.add_argument("--iou-threshold", type=float, default=0.5)
-    parser.add_argument("--min-trajectory", type=int, default=3)
-    parser.add_argument("--max-trajectory-age", type=int, default=5)
-    parser.add_argument("--min-face-size", type=int, default=0)
-    parser.add_argument("--out-path", type=str, default="./data")
-    parser.add_argument("--no-images", action="store_true")
+    parser = argparse.ArgumentParser(allow_abbrev=True,
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--n-shards", type=int, default=256, help="sets the number of shards")
+    parser.add_argument("--shard-i", type=int, required=True, help="indicates specific shard")
+    parser.add_argument("--save-every", type=int, default=5, help="interval between saved frame images")
+    parser.add_argument("--iou-threshold", type=float, default=0.5, help="required area overlap between matches")
+    parser.add_argument("--min-trajectory", type=int, default=3, help="minimum allowed trajectory length")
+    parser.add_argument("--max-trajectory-age", type=int, default=5, help="maximum allowed break in trajectory")
+    parser.add_argument("--min-face-size", type=int, default=20, help="minimum allowed face size in unknown units")
+    parser.add_argument("--face-threshold", type=float, default=0.95, help="minimum allowed face detection score")
+    parser.add_argument("--out-path", type=str, default="./data", help="storage directory")
+    parser.add_argument("--no-images", action="store_true", help="if set, no images are stored")
     parser.add_argument("file")
     args = parser.parse_args()
 
     start_time = time()
 
-    # Models found at: https://github.com/D2KLab/Face-Celebrity-Recognition
-    facenet = tensorflow.keras.models.load_model("models/facenet_keras.h5")
-    facenet.load_weights("models/facenet_keras_weights.h5")
+    # https://stackoverflow.com/questions/67653618/unable-to-load-facenet-keras-h5-model-in-python
+    embedders = { i : FaceNet(key=i) for i in facenet_models }
 
     # Attempt reading precomputed display aspect ratios (DAR) for video files.
     # Not strictly needed but useful for a great result.
@@ -347,7 +414,9 @@ if __name__ == "__main__":
 
     # Comment out 1, same wrapped api!
     # detector = MTCNNDetector()
-    detector = RetinaFaceDetector(min_face_size=args.min_face_size)
+    # detector = RetinaFaceDetector(min_face_size=args.min_face_size)
+    detector = FaceNetDetector(min_face_size=args.min_face_size,
+                               face_threshold=args.face_threshold)
 
     # Tracker - SORT. Has nothing to do with sorting
     multi_tracker = Sort(

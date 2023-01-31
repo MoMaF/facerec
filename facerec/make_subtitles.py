@@ -7,9 +7,11 @@ import argparse
 import re
 import glob
 
-dir = '/scratch/project_2002528'
+#dir = '/scratch/project_2002528'
+dir = '/scratch/project_462000139/jorma/momaf'
 
 parser = argparse.ArgumentParser(allow_abbrev=True,
+                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                  description='Generaate ASS subtitles of face recognitions')
 parser.add_argument("--path", type=str,
                     help="Path to data directory for a film.")
@@ -66,6 +68,11 @@ for s in meta['streams']:
 assert sw is not None and sh is not None and fps is not None
 assert sw>0 and sh>0 and dw>0 and dh>0 and fps and fps>0
 
+fname = meta['format']['filename']
+fname = fname.split('/')[-1]
+fname = ''.join(fname.split('.')[:-1])+'.ass'
+print(f'Writing subtitles in {fname}')
+
 if args.debug:
     print('sw={} sh={} dw={} dh={} sar={} f={} x={} fps={}'.
           format(sw, sh, dw, dh, sar, f, x, fps))
@@ -96,8 +103,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
 header = header.replace('PLAYRESX', str(dw))
 header = header.replace('PLAYRESY', str(dh))
 
-print(header)
-
 def tx(f):
     s = f/fps
     h = int(math.floor(s/3600))
@@ -106,14 +111,14 @@ def tx(f):
     s -= 60*m
     return '{}:{}:{:.2f}'.format(h, m, s)
 
-def boxtext(f, b, t):
+def boxtext(f, b, t, fp):
     s = tx(f)
     e = tx(f+1)
     m = 1/sar
     print(r'Dialogue: 1,{},{},objectbox,foo,000,000,000,,{{\pos(0,0)\p1\3c&H0000FF&}}m {} {} l {} {} {} {} {} {}{{\p0\r}}'.
-          format(s, e, m*b[0], m*b[1], m*b[2], m*b[1], m*b[2], m*b[3], m*b[0], m*b[3]))
+          format(s, e, m*b[0], m*b[1], m*b[2], m*b[1], m*b[2], m*b[3], m*b[0], m*b[3]), file=fp)
     print(r'Dialogue: 1,{},{},objecttxt,foo,000,000,000,,{{\pos({},{})\an5\1c&HFFFFFF&}}{}{{\r}}'.
-          format(s, e, (b[0]+b[2])/2, b[1], t))
+          format(s, e, (b[0]+b[2])/2, b[1], t), file=fp)
 
 cl = json.load(open(args.path+'/clusters.json'))
 cl = cl['clusters']
@@ -125,6 +130,10 @@ ac = pandas.read_csv('actors.csv')
 
 tr = []
 i = 0
+
+fp = open(fname, 'w')
+print(header, file=fp)
+
 with open(args.path+'/trajectories.jsonl') as f:
     for l in f:
         l = json.loads(l)
@@ -142,7 +151,7 @@ with open(args.path+'/trajectories.jsonl') as f:
         #print('b', t)
         
         for b in l['bbs']:
-            boxtext(s, b, t)
+            boxtext(s, b, t, fp)
             s += 1
         i += 1
         

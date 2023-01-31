@@ -11,6 +11,7 @@ import numpy as np
 
 from utils.utils import read_features, get_vectors
 
+emb_name = '20170512-110547'
 
 ACTOR_ID_PREFIX = "momaf:elonet_henkilo_"
 ACTORS_PATH = "./actors.csv"
@@ -120,11 +121,15 @@ def classify(data_dir, X, y, save_p_higher=0.05):
 
     # Get averaged predictions for each trajectory
     trajectory_preds = []
+    first = True
     with open(trajectories_file, "r") as file:
         for line in file:
             trajectory = json.loads(line)
-            vectors = get_vectors(trajectory, feature_vector_map)
-
+            vectors = get_vectors(trajectory, feature_vector_map, emb_name)
+            if first:
+                print(f'Embeddings in {trajectories_file} are {len(vectors[0])} dimensional')
+                first = False
+            
             if len(vectors) > 0:
                 preds = knn.predict_proba(vectors)
                 mean_pred = preds.mean(axis=0)
@@ -160,16 +165,20 @@ def classify(data_dir, X, y, save_p_higher=0.05):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(allow_abbrev=True)
-    parser.add_argument("--path", type=str,
-                        help="Path to data directory for a film.")
+    parser = argparse.ArgumentParser(allow_abbrev=True,
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--path", type=str, default=".",
+                        help="path to JSON data directory for a film")
     args = parser.parse_args()
 
     # Read data about actors and actor images
     actors_df = read_actors(ACTORS_PATH)
     actor_images_df = read_actor_images(ACTOR_IMAGES_PATH)
     embeddings = read_actor_embeddings(ACTOR_EMBEDDINGS_PATH, actor_images_df)
-
+    keys = list(embeddings.keys())
+    print(f'Read {len(keys)} face embeddings with dimensionality {len(embeddings[keys[0]])}'+
+          f' from {ACTOR_EMBEDDINGS_PATH}')
+    
     data_dirs = glob.glob(args.path)
     for data_dir in data_dirs:
         # data_dir will be a movie directory like ./data/123456-data

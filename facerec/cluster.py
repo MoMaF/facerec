@@ -12,6 +12,8 @@ import numpy as np
 
 from utils.utils import read_features, get_vectors
 
+emb_name = '20170512-110547'
+
 def read_trajectories(data_dir: str, vector_map):
     trajectories_file = os.path.join(data_dir, "trajectories.jsonl")
     trajectories = []
@@ -19,7 +21,7 @@ def read_trajectories(data_dir: str, vector_map):
     with open(trajectories_file, "r") as file:
         for line in file:
             trajectory = json.loads(line)
-            vectors = get_vectors(trajectory, vector_map)
+            vectors = get_vectors(trajectory, vector_map, emb_name)
             trajectories.append(trajectory)
             # TODO: something better than mean? Eg. prefer front faces.
             mean_embeddings.append(vectors.mean(axis=0))
@@ -144,14 +146,15 @@ def write_clusters(clusters: np.array, data_dir: str, movie_id: int):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(allow_abbrev=True)
+    parser = argparse.ArgumentParser(allow_abbrev=True,
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--size", type=int, default=18,
-                        help="Preferred size of output clusters (in trajectory count).")
+                        help="preferred size of output clusters (in trajectory count)")
     parser.add_argument("--min-size", type=int, default=12,
-                        help="Preferred minimum size of output clusters.")
+                        help="preferred minimum size of output clusters")
     parser.add_argument("--max-size", type=int, default=24,
-                        help="Maximum size of output clusters.")
-    parser.add_argument("--path", type=str, default=".")
+                        help="maximum size of output clusters")
+    parser.add_argument("--path", type=str, default=".", help="directory in which to find JSON files")
     args = parser.parse_args()
 
     data_dirs = glob.glob(args.path)
