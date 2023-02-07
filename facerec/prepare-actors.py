@@ -10,10 +10,6 @@ import tempfile
 import cv2
 import time
 import json
-from extract import bbox_float_to_int
-from detector import FaceNetDetector
-from keras_facenet.utils import cropBox
-from keras_facenet import FaceNet
 from SPARQLWrapper import SPARQLWrapper, JSON
 
 adir = '/u/18/jormal/unix/doc/projects/momaf/actors'
@@ -168,6 +164,11 @@ facenet_models = [ '20180402-114759', '20180408-102900',
 detector = None
 embedders = {}
 def detect_and_embed_face(idata, iname):
+    from extract import bbox_float_to_int
+    from detector import FaceNetDetector
+    from keras_facenet.utils import cropBox
+    from keras_facenet import FaceNet
+
     global detector, embedders
     if detector is None:
         detector = FaceNetDetector(min_face_size=20, face_threshold=0.95)
@@ -254,13 +255,28 @@ def prepare_one_actor(a, nimg):
 
         
 if __name__=='__main__':
-    nimg = 1
-    film = '125261'
-    # select_image_set(film, nimg)
+    parser = argparse.ArgumentParser(allow_abbrev=True,
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                     description='Utility for collecting actor face embeddings for a film.')
+    parser.add_argument('--film', type=str, required=True, help='filmID, such as 125261-name-of-the-movie')
+    parser.add_argument('--n-faces', type=int, default=20, help='number of faces per actor')
+    parser.add_argument('--path', type=str, default='.',
+                        help='path to JSON data directory for a film')
+    args = parser.parse_args()
+
+    # select_image_set(args.film, args.n_faces)
 
     faces = []
-    alist = fetch_actor_list(film)
+    alist = fetch_actor_list(args.film)
+    if len(alist)==0:
+        print(f'No actors found for film <{args.film}>')
+        exit(1)
+    
     for a in alist:
-        faces.extend(prepare_one_actor(a, nimg))
+        faces.extend(prepare_one_actor(a, args.n_faces))
 
-    json.dump(faces, open('actor-faces-'+film+'.json', 'w'))
+    if len(faces)==0:
+        print(f'No actor faces found for film <{args.film}>')
+        exit(1)
+
+    json.dump(faces, open(args.path+'/actor-faces-'+alist[0]['filmID']+'.json', 'w'))
