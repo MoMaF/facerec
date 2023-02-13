@@ -12,6 +12,8 @@ import numpy as np
 
 from utils.utils import read_features, get_vectors
 
+debug = True
+
 emb_name = '20170512-110547'
 
 def read_trajectories(data_dir: str, vector_map):
@@ -28,15 +30,32 @@ def read_trajectories(data_dir: str, vector_map):
     mean_embeddings = np.array(mean_embeddings)
     return trajectories, mean_embeddings
 
-def cluster_once(vectors, n_clusters):
-    #print(vectors, type(vectors), vectors.shape)
+def cluster_once_old(vectors, n_clusters):
+    if debug:
+        print(vectors, type(vectors), vectors.shape)
     if vectors.shape[0]==0:
         return np.array([], dtype=np.int32)
     if vectors.shape[0]==1:
         return np.array([1], dtype=np.int32)
+
     link = cluster.hierarchy.linkage(vectors, method="complete")
     clusters = cluster.hierarchy.fcluster(link, t=n_clusters, criterion="maxclust")
-    #print(clusters, type(clusters), clusters.dtype)
+    if debug:
+        print(clusters, type(clusters), clusters.dtype)
+    return clusters
+
+def cluster_once(dists, n_clusters):
+    if debug:
+        print(vectors, type(vectors), vectors.shape)
+    if vectors.shape[0]==0:
+        return np.array([], dtype=np.int32)
+    if vectors.shape[0]==1:
+        return np.array([1], dtype=np.int32)
+
+    link = cluster.hierarchy.linkage(vectors, method="complete")
+    clusters = cluster.hierarchy.fcluster(link, t=n_clusters, criterion="maxclust")
+    if debug:
+        print(clusters, type(clusters), clusters.dtype)
     return clusters
 
 def split_and_merge(clusters, min_size=20, max_size=40):
@@ -89,6 +108,58 @@ def relabel(clusters):
         new_clusters[np.where(ci == clusters)[0]] = i
     return new_clusters
 
+def cluster_trajectories_old(trajectories, embeddings, size, min_size, max_size):
+    """Perform clustering, while keeping a max cluster size for ease of use
+    when labeling later on.
+
+    Args:
+        trajectories: trajectory objects that we want to cluster, using their
+            embeddings.
+        embeddings: Face embeddings corresponding to each trajectory; vectors
+            that we will cluster.
+        size: Preferred size. Ideally we'd like the clusters to be this size.
+        min_size: Preferred minimum size - not strictly guaranteed since we'd
+            rather not have outliers mix with the rest.
+        max_size: Maximum size of clusters.
+    """
+    N = len(trajectories)
+    n_clusters = N // size
+    if debug:
+        print(f'N={N} size={size} n_clusters={n_clusters}')
+
+    # Perform initial clustering
+    clusters = cluster_once_new(embeddings, n_clusters)
+    cluster_ids, counts = np.unique(clusters, return_counts=True)
+
+    # Split clusters that were too big
+    # Note: on this level, we won't merge clusters that are too small.
+    r = 0
+    for ci, n in zip(cluster_ids, counts):
+        r += 1
+        if debug:
+            print(f'Cluster {r} n={n} max_size={max_size}')
+        if n > max_size:
+            n_splits = (n + max_size - 1) // max_size
+            if debug:
+                print(f'  n_splits={n_splits}')
+            idx = np.where(ci == clusters)[0]
+            new_clusters = cluster_once_old(embeddings[idx], n_splits)
+            new_clusters = split_and_merge(new_clusters, min_size, max_size)
+
+            next_cluster_id = clusters.max() + 1
+            clusters[idx] = next_cluster_id + new_clusters
+
+    clusters = relabel(clusters)
+    cluster_ids, counts = np.unique(clusters, return_counts=True)
+    print(f"Number of clusters: {len(cluster_ids)}")
+
+    # Finally, relabel clusters with those with most trajectories first
+    # So cluster 0 is the one with most trajectories in it, etc.
+    order = np.argsort(np.argsort(-counts))[cluster_ids]
+    clusters = order[clusters]
+
+    return clusters
+
 def cluster_trajectories(trajectories, embeddings, size, min_size, max_size):
     """Perform clustering, while keeping a max cluster size for ease of use
     when labeling later on.
@@ -105,18 +176,26 @@ def cluster_trajectories(trajectories, embeddings, size, min_size, max_size):
     """
     N = len(trajectories)
     n_clusters = N // size
+    print(f'N={N} size={size} n_clusters={n_clusters}')
 
     # Perform initial clustering
-    clusters = cluster_once(embeddings, n_clusters)
+    distances = get_distances(embeddings, trajectories)
+    clusters = cluster_once_new(embeddings, n_clusters)
     cluster_ids, counts = np.unique(clusters, return_counts=True)
 
     # Split clusters that were too big
     # Note: on this level, we won't merge clusters that are too small.
+    r = 0
     for ci, n in zip(cluster_ids, counts):
+        r += 1
+        if debug:
+            print(f'Cluster {r} n={n} max_size={max_size}')
         if n > max_size:
             n_splits = (n + max_size - 1) // max_size
+            if debug:
+                print(f'  n_splits={n_splits}')
             idx = np.where(ci == clusters)[0]
-            new_clusters = cluster_once(embeddings[idx], n_splits)
+            new_clusters = cluster_once(dists...embeddings[idx], n_splits)
             new_clusters = split_and_merge(new_clusters, min_size, max_size)
 
             next_cluster_id = clusters.max() + 1
@@ -172,4 +251,4 @@ if __name__ == "__main__":
         )
 
         write_clusters(clusters, data_dir, movie_id)
-        print()
+        #print()
