@@ -139,7 +139,8 @@ with open(args.path+'/trajectories.jsonl') as f:
         l = json.loads(l)
         s = l['start']
         t = cl[i]
-        t = pr[str(t)]
+        clu = str(t)
+        t = pr[clu]
         t = [ (v, k) for k, v in t.items() ]
         #print('a', t)
         t.sort()
@@ -151,7 +152,7 @@ with open(args.path+'/trajectories.jsonl') as f:
         #print('b', t)
         
         for b in l['bbs']:
-            boxtext(s, b, t, fp)
+            boxtext(s, b, t+"/"+clu, fp)
             s += 1
         i += 1
         
