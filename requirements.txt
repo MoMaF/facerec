@@ -8,3 +8,4 @@ scipy
 filterpy
 opencv-python
 keras-facenet
+SPARQLWrapper
