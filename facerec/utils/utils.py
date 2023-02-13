@@ -88,8 +88,10 @@ def get_vectors_old(trajectory, vector_map):
     return np.array(vectors, dtype=np.float32)
 
 def read_features(data_dir: str):
+    print('Reading features.')
     features_file = os.path.join(data_dir, "features.jsonl")
     vector_map = {}
+    nb = 0
     with open(features_file, "r") as file:
         for line in file:
             obj = json.loads(line)
@@ -97,6 +99,8 @@ def read_features(data_dir: str):
             if frame not in vector_map:
                 vector_map[frame] = {}
             vector_map[frame][box] = obj["embeddings"]
+            nb += 1
+    print('  features read for {len(vector_map)} frames and {nb} boxes')
     # Map frame_index, box -> vector
     return vector_map
 
