@@ -12,9 +12,6 @@ import time
 import json
 from SPARQLWrapper import SPARQLWrapper, JSON
 
-adir = '/u/18/jormal/unix/doc/projects/momaf/actors'
-zipf = adir+'/actor-images.zip'
-
 sparql_url = 'http://momaf-data.utu.fi:3030/momaf-raw/sparql'
 
 film_sq = '''
@@ -200,13 +197,13 @@ def detect_and_embed_face(idata, iname):
     return {'box': tight_box, 'embeddings': embeddings}
 
 
-def prepare_one_actor(a, nimg):
+def prepare_one_actor(a, nimg, zipf):
     files_in_zip = []
     if os.path.isfile(zipf):
         with zipfile.ZipFile(zipf) as aimg:    
             files_in_zip = aimg.namelist()
-    if not os.path.exists(adir):
-        os.mkdir(adir)
+    if not os.path.exists(os.path.dirname(zipf)):
+        os.mkdir(os.path.dirname(zipf))
     aimg = zipfile.ZipFile(zipf, 'a')
 
     fid, aid, aname = (a['filmID'], a['actorID'], a['actorname'])
@@ -259,6 +256,7 @@ if __name__=='__main__':
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description='Utility for collecting actor face embeddings for a film.')
     parser.add_argument('--film', type=str, required=True, help='filmID, such as 125261-name-of-the-movie')
+    parser.add_argument('--actors-dir', type=str, default='.', help='directory to store and find actor-images.zip')
     parser.add_argument('--n-faces', type=int, default=20, help='number of faces per actor')
     parser.add_argument('--path', type=str, default='.',
                         help='path to JSON data directory for a film')
@@ -272,8 +270,10 @@ if __name__=='__main__':
         print(f'No actors found for film <{args.film}>')
         exit(1)
     
+    zipf = args.actors_dir+'/actor-images.zip'
+
     for a in alist:
-        faces.extend(prepare_one_actor(a, args.n_faces))
+        faces.extend(prepare_one_actor(a, args.n_faces, zipf))
 
     if len(faces)==0:
         print(f'No actor faces found for film <{args.film}>')
