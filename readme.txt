@@ -1,4 +1,5 @@
-srun -p small-g --gpus-per-node=1 -A project_462000139 --time=08:00:00 --pty bash -i
+srun -p small -A project_462000139 --time=08:00:00 --mem 32G --pty bash -i
+srun -p small-g --gpus-per-node=1 -A project_462000139 --time=08:00:00 --mem 32G --pty bash -i
 
 export OMP_NUM_THREADS=1
 export MPICH_GPU_SUPPORT_ENABLED=1

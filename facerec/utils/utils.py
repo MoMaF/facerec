@@ -100,7 +100,7 @@ def read_features(data_dir: str):
                 vector_map[frame] = {}
             vector_map[frame][box] = obj["embeddings"]
             nb += 1
-    print('  features read for {len(vector_map)} frames and {nb} boxes')
+    print(f'  features read for {len(vector_map)} frames and {nb} boxes')
     # Map frame_index, box -> vector
     return vector_map
 

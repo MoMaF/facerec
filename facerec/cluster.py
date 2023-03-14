@@ -128,7 +128,7 @@ def cluster_trajectories_old(trajectories, embeddings, size, min_size, max_size)
         print(f'N={N} size={size} n_clusters={n_clusters}')
 
     # Perform initial clustering
-    clusters = cluster_once_new(embeddings, n_clusters)
+    clusters = cluster_once_old(embeddings, n_clusters)
     cluster_ids, counts = np.unique(clusters, return_counts=True)
 
     # Split clusters that were too big
@@ -179,8 +179,8 @@ def cluster_trajectories(trajectories, embeddings, size, min_size, max_size):
     print(f'N={N} size={size} n_clusters={n_clusters}')
 
     # Perform initial clustering
-    distances = get_distances(embeddings, trajectories)
-    clusters = cluster_once_new(embeddings, n_clusters)
+    # distances = get_distances(embeddings, trajectories)
+    clusters = cluster_once_old(embeddings, n_clusters)
     cluster_ids, counts = np.unique(clusters, return_counts=True)
 
     # Split clusters that were too big
@@ -195,7 +195,8 @@ def cluster_trajectories(trajectories, embeddings, size, min_size, max_size):
             if debug:
                 print(f'  n_splits={n_splits}')
             idx = np.where(ci == clusters)[0]
-            new_clusters = cluster_once(dists...embeddings[idx], n_splits)
+            #new_clusters = cluster_once(dists...embeddings[idx], n_splits)
+            new_clusters = cluster_once_old(embeddings[idx], n_splits)
             new_clusters = split_and_merge(new_clusters, min_size, max_size)
 
             next_cluster_id = clusters.max() + 1
