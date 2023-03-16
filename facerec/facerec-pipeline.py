@@ -113,9 +113,11 @@ def run_script(s):
         v = os.getenv(i)
         if v is not None:
             if i=='PATH':
-                v = f'{os.path.expanduser("~")}/bin:{v}'
+                if 'PYTHONUSERBASE' in os.environ:
+                    v = f'{os.environ["PYTHONUSERBASE"]}/bin:{v}'
+                # v = f'{os.path.expanduser("~")}/bin:{v}'
             env[i] = v
-    print(env)
+    #print(env)
     
     r = subprocess.run(s, shell=True, stdout=PIPE, stderr=STDOUT,
                        universal_newlines=True, env=env)
