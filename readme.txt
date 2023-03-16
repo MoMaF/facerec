@@ -5,7 +5,7 @@ export OMP_NUM_THREADS=1
 export MPICH_GPU_SUPPORT_ENABLED=1
 module use /appl/local/csc/modulefiles
 module load tensorflow
-export PYTHONUSERBASE=/scratch/project_462000139/jorma/momaf/github/facerec/python_base
+export PYTHONUSERBASE=/scratch/project_462000189/jorma/momaf/github/facerec/python_base
 
 pip install -r requirements.txt
 pip install --no-deps retinaface

@@ -9,13 +9,16 @@ import tempfile
 from datetime import datetime
 from subprocess import PIPE, STDOUT
 
-momaf_dir       =  '/scratch/project_462000139/jorma/momaf'
+# ./facerec/facerec-pipeline.py --filmfile 125261-PekkaJaPatkaPahassaPulassa-1955.mp4
+# ./facerec/facerec-pipeline.py --filmfile 117302-NuoriMyllari-1958-2.mp4
+
+momaf_dir       =  '/scratch/project_462000189/jorma/momaf'
 python_base_dir = f'{momaf_dir}/github/facerec/python_base'
 
 _macros_ = { 'GPU-P': 'small-g',
              'CPU-P': 'small'    }
 
-_default_ = { 'account':       'project_462000139',
+_default_ = { 'account':       'project_462000189',
               'job-name':      'JOB-NAME',
               'output':        'logs/slurm-FILMID-JOB-NAME-%A_%a.out' }
 
@@ -27,7 +30,11 @@ _partition_ = { 'small-g': { 'gpus-per-node': '1',
                 'small':   { 'mem-per-cpu':   '8000',
                              'time':          '03:00:00'}}
 
-_stages_ = [ { 'name':      'extract',
+_stages_ = [ { 'name':      'download',
+               'command':   './facerec/download.sh ARGS.FILMFILE',
+             },
+
+             { 'name':      'extract',
                'partition': 'GPU-P',
                'array':     '0-99',
                'setup':     'tensorflow',
@@ -99,24 +106,36 @@ def run_script(s):
     os.chmod(s, stat.S_IRUSR | stat.S_IXUSR)
     # r = subprocess.run(f'/bin/ls -l {s}', shell=True)
     # r = subprocess.run(f'/bin/cat {s}', shell=True)
-    r = subprocess.run(s, shell=True, stdout=PIPE, stderr=STDOUT)
+    #var = ['PATH', 'OS_STORAGE_URL', 'OS_AUTH_TOKEN']
+    var = os.environ.keys()
+    env = {}
+    for i in var:
+        v = os.getenv(i)
+        if v is not None:
+            if i=='PATH':
+                v = f'{os.path.expanduser("~")}/bin:{v}'
+            env[i] = v
+    print(env)
+    
+    r = subprocess.run(s, shell=True, stdout=PIPE, stderr=STDOUT,
+                       universal_newlines=True, env=env)
     print(f'{datetime.now()}   Script {s} finished with {r.returncode}')
     return r.returncode==0, r.stdout
     
 
 def show_script(s):
-    print('================ script file begins ==============')
+    print(f'================ script file {s} begins ==============')
     print(open(s).read())
-    print('================ script file ends ================')
+    print(f'================ script file {s} ends ================')
 
 
 def show_output(s):
-    print('================== output begins ================')
-    print(open(s).read())
-    print('================== output ends ==================')
+    print(f'================== output begins ================')
+    print(s, end='')
+    print(f'================== output ends ==================')
 
 
-def run_stage(stage):
+def run_stage(stage, verbose):
     #print(stage)
     name = stage['name']
 
@@ -185,19 +204,23 @@ def run_stage(stage):
             return False
     else:
         r, t = run_script(sfile.name)    
-        if not r:
-            print(f'{datetime.now()} Running script failed in stage <{name}>')
+        if not r or verbose:
+            if not r:
+                print(f'{datetime.now()} Running script failed in stage <{name}>')
+            else:
+                print(f'{datetime.now()}   Run successfully in stage <{name}>')
             show_script(sfile.name)
             show_output(t)
-            return False
+            if not r:
+                return False
 
     return True
 
 
 def main(args):
-    if not os.path.isfile(args.filmfile):
-        print(f'<{args.filmfile}> is not a file')
-        return False
+    # if not os.path.isfile(args.filmfile):
+    #     print(f'<{args.filmfile}> is not a file')
+    #     return False
 
     film = args.filmfile.split('/')[-1]
     
@@ -225,7 +248,7 @@ def main(args):
         start_time = datetime.now()
         print(f'{start_time} Starting stage #{si} <{stage["name"]}> for film <{film}>')
         
-        ok = run_stage(stage)
+        ok = run_stage(stage, verbose=args.verbose)
         end_time = datetime.now()
         diff_time = end_time-start_time
         if not ok:
@@ -244,7 +267,11 @@ if __name__ == "__main__":
                         help='path to the film file including filmID, such as 125261-name.mp4')
     parser.add_argument("--out-path", type=str, default=".",
                         help="directory where film-specific sub-directories are created")
+    parser.add_argument("--verbose", action='store_true',
+                        help="adds verbosity")
     args = parser.parse_args()
+
+    print(os.environ['PATH'])
 
     exit(0 if main(args) else 1)
     
